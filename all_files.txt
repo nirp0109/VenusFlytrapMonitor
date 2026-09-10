@@ -1,0 +1,2502 @@
+﻿===== FILE: .gitignore =====
+
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+
+===== FILE: app\.gitignore =====
+
+/build
+
+===== FILE: app\build.gradle =====
+
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace 'com.newvision.venusflytrapmonitor'
+    compileSdk {
+        version = release(36)
+    }
+
+    defaultConfig {
+        applicationId "com.newvision.venusflytrapmonitor"
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    buildFeatures {
+        viewBinding true
+    }
+}
+
+dependencies {
+    implementation libs.appcompat
+    implementation libs.material
+    implementation libs.constraintlayout
+    implementation libs.navigation.fragment
+    implementation libs.navigation.ui
+    def camerax_version = "1.4.2"
+
+    implementation "androidx.camera:camera-core:$camerax_version"
+    implementation "androidx.camera:camera-camera2:$camerax_version"
+    implementation "androidx.camera:camera-lifecycle:$camerax_version"
+    implementation "androidx.camera:camera-view:$camerax_version"
+
+    testImplementation libs.junit
+    androidTestImplementation libs.ext.junit
+    androidTestImplementation libs.espresso.core
+
+
+}
+
+===== FILE: app\proguard-rules.pro =====
+
+# Add project specific ProGuard rules here.
+# You can control the set of applied configuration files using the
+# proguardFiles setting in build.gradle.
+#
+# For more details, see
+#   http://developer.android.com/guide/developing/tools/proguard.html
+
+# If your project uses WebView with JS, uncomment the following
+# and specify the fully qualified class name to the JavaScript interface
+# class:
+#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
+#   public *;
+#}
+
+# Uncomment this to preserve the line number information for
+# debugging stack traces.
+#-keepattributes SourceFile,LineNumberTable
+
+# If you keep the line number information, uncomment this to
+# hide the original source file name.
+#-renamesourcefileattribute SourceFile
+
+===== FILE: app\src\androidTest\java\com\newvision\venusflytrapmonitor\ExampleInstrumentedTest.java =====
+
+package com.newvision.venusflytrapmonitor;
+
+import android.content.Context;
+
+import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+import static org.junit.Assert.*;
+
+/**
+ * Instrumented test, which will execute on an Android device.
+ *
+ * @see <a href="http://d.android.com/tools/testing">Testing documentation</a>
+ */
+@RunWith(AndroidJUnit4.class)
+public class ExampleInstrumentedTest {
+    @Test
+    public void useAppContext() {
+        // Context of the app under test.
+        Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertEquals("com.newvision.venusflytrapmonitor", appContext.getPackageName());
+    }
+}
+
+===== FILE: app\src\main\AndroidManifest.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- use camera is a must -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VenusFlytrapMonitor">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.VenusFlytrapMonitor" >
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
+
+===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\MainActivity.java =====
+
+package com.newvision.venusflytrapmonitor;
+
+import android.graphics.Matrix;
+import android.Manifest;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.MotionEvent;
+import android.view.WindowManager;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.Camera;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageProxy;
+import androidx.camera.core.Preview;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.view.PreviewView;
+import androidx.core.content.ContextCompat;
+
+import com.google.common.util.concurrent.ListenableFuture;
+
+import org.json.JSONArray;
+
+import java.io.ByteArrayOutputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import android.graphics.Bitmap;
+
+public class MainActivity extends AppCompatActivity {
+
+    private static final String TAG = "VenusMonitor";
+
+    private PreviewView previewView;
+
+    private ExecutorService analysisExecutor;
+
+    private WebServer webServer;
+
+    private TrapDetector trapDetector;
+
+    private Camera camera;
+
+    private float currentZoomRatio = 1.0f;
+
+    private float pinchStartDistance = 0.0f;
+
+    private byte[] latestJpeg;
+
+    private final ActivityResultLauncher<String> cameraPermissionLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.RequestPermission(),
+                    granted -> {
+
+                        if (granted) {
+                            startCamera();
+                        } else {
+                            Log.e(
+                                    TAG,
+                                    "Camera permission denied"
+                            );
+                        }
+                    }
+            );
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+
+        super.onCreate(savedInstanceState);
+
+        getWindow().addFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        );
+
+        setContentView(R.layout.activity_main);
+
+        previewView =
+                findViewById(R.id.previewView);
+
+        previewView.setOnTouchListener(this::handlePreviewTouch);
+
+        analysisExecutor =
+                Executors.newSingleThreadExecutor();
+
+        webServer =
+                new WebServer(this);
+
+        webServer.setZoomChangeListener(this::applyZoomRatio);
+        webServer.start();
+
+        loadTrapConfiguration();
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED) {
+
+            startCamera();
+
+        } else {
+
+            cameraPermissionLauncher.launch(
+                    Manifest.permission.CAMERA
+            );
+        }
+    }
+
+    private void loadTrapConfiguration() {
+
+        SharedPreferences preferences =
+                getSharedPreferences(
+                        "venus_monitor",
+                        MODE_PRIVATE
+                );
+
+        currentZoomRatio =
+                preferences.getFloat(
+                        "zoom",
+                        1.0f
+                );
+
+        String trapsJson =
+                preferences.getString(
+                        "traps",
+                        "[]"
+                );
+
+        try {
+            JSONArray traps =
+                    new JSONArray(trapsJson);
+
+            trapDetector =
+                    new TrapDetector(traps);
+
+            Log.d(
+                    TAG,
+                    "Loaded " +
+                            traps.length() +
+                            " ROI(s), zoom=" +
+                            currentZoomRatio
+            );
+
+        } catch (Exception e) {
+            Log.e(
+                    TAG,
+                    "Failed to load trap configuration",
+                    e
+            );
+
+            trapDetector =
+                    new TrapDetector(new JSONArray());
+        }
+    }
+
+    private boolean handlePreviewTouch(
+            android.view.View view,
+            MotionEvent event
+    ) {
+
+        if (trapDetector == null ||
+                trapDetector.hasConfiguredRois()) {
+            return false;
+        }
+
+        if (event.getPointerCount() != 2) {
+            return false;
+        }
+
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_POINTER_DOWN:
+                pinchStartDistance = getPointerDistance(event);
+                break;
+
+            case MotionEvent.ACTION_MOVE:
+                float currentDistance = getPointerDistance(event);
+
+                if (pinchStartDistance > 0f && currentDistance > 0f) {
+                    float scale = currentDistance / pinchStartDistance;
+                    applyZoomRatio(currentZoomRatio * scale);
+                    pinchStartDistance = currentDistance;
+                    return true;
+                }
+                break;
+
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                pinchStartDistance = 0f;
+                break;
+
+            default:
+                break;
+        }
+
+        return false;
+    }
+
+    private float getPointerDistance(MotionEvent event) {
+
+        float dx = event.getX(0) - event.getX(1);
+        float dy = event.getY(0) - event.getY(1);
+
+        return (float) Math.hypot(dx, dy);
+    }
+
+    private void applyZoomRatio(float zoomRatio) {
+
+        if (camera == null) {
+            return;
+        }
+
+        currentZoomRatio = Math.max(1.0f, Math.min(3.0f, zoomRatio));
+        camera.getCameraControl().setZoomRatio(currentZoomRatio);
+    }
+
+    private void startCamera() {
+
+        ListenableFuture<ProcessCameraProvider>
+                cameraProviderFuture =
+                ProcessCameraProvider.getInstance(
+                        this
+                );
+
+        cameraProviderFuture.addListener(
+                () -> {
+
+                    try {
+
+                        ProcessCameraProvider
+                                cameraProvider =
+                                cameraProviderFuture.get();
+
+                        bindCamera(
+                                cameraProvider
+                        );
+
+                    } catch (Exception e) {
+
+                        Log.e(
+                                TAG,
+                                "Failed to start camera",
+                                e
+                        );
+                    }
+
+                },
+                ContextCompat.getMainExecutor(this)
+        );
+    }
+
+    private void bindCamera(
+            ProcessCameraProvider cameraProvider
+    ) {
+
+        Preview preview =
+                new Preview.Builder()
+                        .setTargetRotation(
+                                getWindowManager()
+                                        .getDefaultDisplay()
+                                        .getRotation()
+                        )
+                        .build();
+
+        preview.setSurfaceProvider(
+                previewView.getSurfaceProvider()
+        );
+
+        ImageAnalysis imageAnalysis =
+                new ImageAnalysis.Builder()
+                        .setTargetRotation(
+                                getWindowManager()
+                                        .getDefaultDisplay()
+                                        .getRotation()
+                        )
+                        .setBackpressureStrategy(
+                                ImageAnalysis
+                                        .STRATEGY_KEEP_ONLY_LATEST
+                        )
+                        .build();
+
+
+
+        imageAnalysis.setAnalyzer(
+                analysisExecutor,
+                this::analyzeFrame
+        );
+
+        CameraSelector cameraSelector =
+                CameraSelector.DEFAULT_BACK_CAMERA;
+
+        cameraProvider.unbindAll();
+
+        camera = cameraProvider.bindToLifecycle(
+                this,
+                cameraSelector,
+                preview,
+                imageAnalysis
+        );
+
+        applyZoomRatio(currentZoomRatio);
+    }
+
+    private Bitmap rotateBitmap(
+            Bitmap bitmap,
+            int rotationDegrees
+    ) {
+
+        if (rotationDegrees == 0) {
+            return bitmap;
+        }
+
+        Matrix matrix = new Matrix();
+
+        matrix.postRotate(rotationDegrees);
+
+        return Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.getWidth(),
+                bitmap.getHeight(),
+                matrix,
+                true
+        );
+    }
+
+    private void analyzeFrame(
+            ImageProxy imageProxy
+    ) {
+
+        Bitmap bitmap = null;
+
+        try {
+
+            bitmap =
+                    imageProxy.toBitmap();
+
+            if (trapDetector != null) {
+
+                trapDetector.analyzeFrame(
+                        bitmap
+                );
+            }
+
+            ByteArrayOutputStream outputStream =
+                    new ByteArrayOutputStream();
+
+            bitmap.compress(
+                    Bitmap.CompressFormat.JPEG,
+                    80,
+                    outputStream
+            );
+
+            latestJpeg =
+                    outputStream.toByteArray();
+
+            webServer.setLatestJpeg(
+                    latestJpeg
+            );
+
+        } catch (Exception e) {
+
+            Log.e(
+                    TAG,
+                    "Failed to analyze frame",
+                    e
+            );
+
+        } finally {
+
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+
+            imageProxy.close();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+
+        super.onDestroy();
+
+        if (analysisExecutor != null) {
+            analysisExecutor.shutdown();
+        }
+
+        if (webServer != null) {
+            webServer.stop();
+        }
+    }
+}
+
+===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\TrapDetector.java =====
+
+package com.newvision.venusflytrapmonitor;
+
+import android.graphics.Bitmap;
+import android.util.Log;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+public class TrapDetector {
+
+    private static final String TAG =
+            "TrapDetector";
+
+    private static final long CALIBRATION_TIME_MS =
+            15000;
+
+    private final JSONArray traps;
+
+    private final float[] baselineBrightness;
+    private final int[] sampleCount;
+
+    private long calibrationStartTime = 0;
+
+    private boolean calibrated = false;
+
+    private long lastLogTime = 0;
+
+    public TrapDetector(JSONArray traps) {
+
+        this.traps = traps;
+
+        baselineBrightness =
+                new float[traps.length()];
+
+        sampleCount =
+                new int[traps.length()];
+    }
+
+    public boolean hasConfiguredRois() {
+        return traps != null && traps.length() > 0;
+    }
+
+    public void analyzeFrame(
+            Bitmap bitmap
+    ) {
+
+        try {
+
+            if (calibrationStartTime == 0) {
+
+                calibrationStartTime =
+                        System.currentTimeMillis();
+            }
+
+            long now =
+                    System.currentTimeMillis();
+
+            for (int i = 0;
+                 i < traps.length();
+                 i++) {
+
+                JSONObject trap =
+                        traps.getJSONObject(i);
+
+                float left =
+                        (float) trap.getDouble(
+                                "left"
+                        );
+
+                float top =
+                        (float) trap.getDouble(
+                                "top"
+                        );
+
+                float roiWidth =
+                        (float) trap.getDouble(
+                                "width"
+                        );
+
+                float roiHeight =
+                        (float) trap.getDouble(
+                                "height"
+                        );
+
+                int x =
+                        Math.round(
+                                left *
+                                        bitmap.getWidth()
+                        );
+
+                int y =
+                        Math.round(
+                                top *
+                                        bitmap.getHeight()
+                        );
+
+                int width =
+                        Math.round(
+                                roiWidth *
+                                        bitmap.getWidth()
+                        );
+
+                int height =
+                        Math.round(
+                                roiHeight *
+                                        bitmap.getHeight()
+                        );
+
+                float brightness =
+                        calculateAverageBrightness(
+                                bitmap,
+                                x,
+                                y,
+                                width,
+                                height
+                        );
+
+                if (!calibrated) {
+
+                    baselineBrightness[i] +=
+                            brightness;
+
+                    sampleCount[i]++;
+                }
+            }
+
+            if (!calibrated &&
+                    now - calibrationStartTime >=
+                            CALIBRATION_TIME_MS) {
+
+                for (int i = 0;
+                     i < traps.length();
+                     i++) {
+
+                    if (sampleCount[i] > 0) {
+
+                        baselineBrightness[i] /=
+                                sampleCount[i];
+                    }
+
+                    Log.d(
+                            TAG,
+                            "ROI " +
+                                    getTrapId(i) +
+                                    ": baseline=" +
+                                    baselineBrightness[i]
+                    );
+                }
+
+                calibrated = true;
+
+                Log.d(
+                        TAG,
+                        "Calibration complete"
+                );
+            }
+
+            if (calibrated &&
+                    now - lastLogTime >= 2000) {
+
+                for (int i = 0;
+                     i < traps.length();
+                     i++) {
+
+                    JSONObject trap =
+                            traps.getJSONObject(i);
+
+                    float left =
+                            (float) trap.getDouble(
+                                    "left"
+                            );
+
+                    float top =
+                            (float) trap.getDouble(
+                                    "top"
+                            );
+
+                    float roiWidth =
+                            (float) trap.getDouble(
+                                    "width"
+                            );
+
+                    float roiHeight =
+                            (float) trap.getDouble(
+                                    "height"
+                            );
+
+                    int x =
+                            Math.round(
+                                    left *
+                                            bitmap.getWidth()
+                            );
+
+                    int y =
+                            Math.round(
+                                    top *
+                                            bitmap.getHeight()
+                            );
+
+                    int width =
+                            Math.round(
+                                    roiWidth *
+                                            bitmap.getWidth()
+                            );
+
+                    int height =
+                            Math.round(
+                                    roiHeight *
+                                            bitmap.getHeight()
+                            );
+
+                    float brightness =
+                            calculateAverageBrightness(
+                                    bitmap,
+                                    x,
+                                    y,
+                                    width,
+                                    height
+                            );
+
+                    float difference =
+                            Math.abs(
+                                    brightness -
+                                            baselineBrightness[i]
+                            );
+
+                    Log.d(
+                            TAG,
+                            "ROI " +
+                                    getTrapId(i) +
+                                    ": brightness=" +
+                                    brightness +
+                                    ", diff=" +
+                                    difference
+                    );
+                }
+
+                lastLogTime = now;
+            }
+
+        } catch (Exception e) {
+
+            Log.e(
+                    TAG,
+                    "Failed to analyze ROI",
+                    e
+            );
+        }
+    }
+    private int getTrapId(int index)
+            throws Exception {
+
+        JSONObject trap =
+                traps.getJSONObject(index);
+
+        return trap.getInt("id");
+    }
+
+    private float calculateAverageBrightness(
+            Bitmap bitmap,
+            int x,
+            int y,
+            int width,
+            int height
+    ) {
+
+        int right =
+                Math.min(
+                        x + width,
+                        bitmap.getWidth()
+                );
+
+        int bottom =
+                Math.min(
+                        y + height,
+                        bitmap.getHeight()
+                );
+
+        x = Math.max(0, x);
+        y = Math.max(0, y);
+
+        if (x >= right ||
+                y >= bottom) {
+
+            return 0;
+        }
+
+        long totalBrightness = 0;
+        long samples = 0;
+
+        int step = 4;
+
+        for (int py = y;
+             py < bottom;
+             py += step) {
+
+            for (int px = x;
+                 px < right;
+                 px += step) {
+
+                int pixel =
+                        bitmap.getPixel(
+                                px,
+                                py
+                        );
+
+                int red =
+                        (pixel >> 16) & 0xFF;
+
+                int green =
+                        (pixel >> 8) & 0xFF;
+
+                int blue =
+                        pixel & 0xFF;
+
+                int brightness =
+                        (red + green + blue) / 3;
+
+                totalBrightness +=
+                        brightness;
+
+                samples++;
+            }
+        }
+
+        if (samples == 0) {
+            return 0;
+        }
+
+        return (float) totalBrightness /
+                samples;
+    }
+}
+
+===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\WebServer.java =====
+
+package com.newvision.venusflytrapmonitor;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.util.Log;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.util.function.Consumer;
+
+public class WebServer {
+
+    private static final String TAG = "VenusWebServer";
+    private static final float MIN_ZOOM = 1.0f;
+    private static final float MAX_ZOOM = 3.0f;
+
+    private final Context context;
+    private final SharedPreferences preferences;
+
+    private ServerSocket serverSocket;
+    private Thread serverThread;
+
+    private volatile byte[] latestJpeg;
+    private volatile Consumer<Float> zoomChangeListener;
+
+    public WebServer(Context context) {
+        this.context = context.getApplicationContext();
+
+        preferences =
+                this.context.getSharedPreferences(
+                        "venus_monitor",
+                        Context.MODE_PRIVATE
+                );
+    }
+
+    public void setLatestJpeg(byte[] jpeg) {
+        latestJpeg = jpeg;
+    }
+
+    public void setZoomChangeListener(Consumer<Float> listener) {
+        zoomChangeListener = listener;
+    }
+
+    public void start() {
+
+        serverThread = new Thread(() -> {
+
+            try {
+
+                serverSocket = new ServerSocket(8080);
+
+                Log.d(
+                        TAG,
+                        "Server started on port 8080"
+                );
+
+                while (!serverSocket.isClosed()) {
+
+                    Socket socket =
+                            serverSocket.accept();
+
+                    Log.d(
+                            TAG,
+                            "Client connected: "
+                                    + socket.getInetAddress()
+                    );
+
+                    handleRequest(socket);
+
+                    socket.close();
+                }
+
+            } catch (IOException e) {
+
+                Log.e(
+                        TAG,
+                        "Server error",
+                        e
+                );
+            }
+
+        });
+
+        serverThread.start();
+    }
+
+    private void handleRequest(Socket socket) {
+
+        try {
+
+            BufferedReader reader =
+                    new BufferedReader(
+                            new InputStreamReader(
+                                    socket.getInputStream()
+                            )
+                    );
+
+            String requestLine =
+                    reader.readLine();
+
+            Log.d(
+                    TAG,
+                    "Request: " + requestLine
+            );
+
+            if (requestLine == null) {
+                return;
+            }
+
+            int contentLength = 0;
+
+            String line;
+
+            while ((line = reader.readLine()) != null &&
+                    !line.isEmpty()) {
+
+                if (line.toLowerCase()
+                        .startsWith("content-length:")) {
+
+                    String value =
+                            line.substring(
+                                    "content-length:".length()
+                            ).trim();
+
+                    contentLength =
+                            Integer.parseInt(value);
+                }
+            }
+
+            if (requestLine.startsWith("GET /preview")) {
+
+                sendPreview(socket);
+
+            } else if (
+                    requestLine.startsWith("GET /traps")
+            ) {
+
+                String traps =
+                        preferences.getString(
+                                "traps",
+                                "[]"
+                        );
+
+                sendJson(socket, traps);
+
+            } else if (
+                    requestLine.startsWith("POST /traps")
+            ) {
+
+                String body =
+                        readRequestBody(
+                                reader,
+                                contentLength
+                        );
+
+                preferences
+                        .edit()
+                        .putString("traps", body)
+                        .apply();
+
+
+                Log.d(
+                        TAG,
+                        "Traps saved: " + body
+                );
+
+                sendText(
+                        socket,
+                        "Traps saved"
+                );
+
+            } else if (
+                    requestLine.startsWith("POST /zoom")
+            ) {
+
+                handleZoomRequest(
+                        socket,
+                        reader,
+                        contentLength
+                );
+
+            } else {
+
+                sendHtml(socket);
+            }
+        } catch (Exception e) {
+
+            Log.e(
+                    TAG,
+                    "Failed to handle request",
+                    e
+            );
+        }
+    }
+
+    private String readRequestBody(
+            BufferedReader reader,
+            int contentLength
+    ) throws IOException {
+
+        char[] buffer =
+                new char[contentLength];
+
+        int totalRead = 0;
+
+        while (totalRead < contentLength) {
+
+            int count =
+                    reader.read(
+                            buffer,
+                            totalRead,
+                            contentLength - totalRead
+                    );
+
+            if (count == -1) {
+                break;
+            }
+
+            totalRead += count;
+        }
+
+        return new String(
+                buffer,
+                0,
+                totalRead
+        );
+    }
+
+    private void handleZoomRequest(
+            Socket socket,
+            BufferedReader reader,
+            int contentLength
+    ) throws IOException {
+
+        try {
+            String body = readRequestBody(reader, contentLength);
+            JSONObject payload = new JSONObject(body);
+
+            if (!payload.has("zoom")) {
+                sendText(socket, "Missing zoom value", 400);
+                return;
+            }
+
+            float requestedZoom = (float) payload.getDouble("zoom");
+
+            String traps = preferences.getString("traps", "[]");
+            JSONArray configuredTraps = new JSONArray();
+
+            try {
+                configuredTraps = new JSONArray(traps);
+            } catch (Exception ignored) {
+                Log.w(TAG, "Stored ROI list is invalid; treating as empty");
+            }
+
+            if (configuredTraps.length() > 0) {
+                sendText(socket, "Zoom disabled while ROI exists", 400);
+                return;
+            }
+
+            float clampedZoom =
+                    Math.max(
+                            MIN_ZOOM,
+                            Math.min(MAX_ZOOM, requestedZoom)
+                    );
+
+            preferences
+                    .edit()
+                    .putFloat("zoom", clampedZoom)
+                    .apply();
+
+            if (zoomChangeListener != null) {
+                zoomChangeListener.accept(clampedZoom);
+            }
+
+            sendText(socket, "Zoom set to " + clampedZoom, 200);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to process zoom request", e);
+            sendText(socket, "Invalid zoom payload", 400);
+        }
+    }
+
+    private void sendJson(
+            Socket socket,
+            String body
+    ) throws IOException {
+
+        byte[] bodyBytes =
+                body.getBytes(
+                        StandardCharsets.UTF_8
+                );
+
+        String headers =
+                "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: application/json; charset=UTF-8\r\n" +
+                        "X-Zoom: " +
+                        preferences.getFloat("zoom", 1.0f) +
+                        "\r\n" +
+                        "Content-Length: " +
+                        bodyBytes.length +
+                        "\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n";
+
+        OutputStream outputStream =
+                socket.getOutputStream();
+
+        outputStream.write(
+                headers.getBytes(
+                        StandardCharsets.UTF_8
+                )
+        );
+
+        outputStream.write(bodyBytes);
+        outputStream.flush();
+    }
+
+    private void sendText(
+            Socket socket,
+            String body
+    ) throws IOException {
+        sendText(socket, body, 200);
+    }
+
+    private void sendText(
+            Socket socket,
+            String body,
+            int statusCode
+    ) throws IOException {
+
+        byte[] bodyBytes =
+                body.getBytes(
+                        StandardCharsets.UTF_8
+                );
+
+        String headers =
+                "HTTP/1.1 " + statusCode + " " +
+                        (statusCode == 200 ? "OK" : "Bad Request") + "\r\n" +
+                        "Content-Type: text/plain; charset=UTF-8\r\n" +
+                        "Content-Length: " +
+                        bodyBytes.length +
+                        "\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n";
+
+        OutputStream outputStream =
+                socket.getOutputStream();
+
+        outputStream.write(
+                headers.getBytes(
+                        StandardCharsets.UTF_8
+                )
+        );
+
+        outputStream.write(bodyBytes);
+        outputStream.flush();
+    }
+
+    private void sendPreview(Socket socket) {
+
+        try {
+
+            byte[] jpeg = latestJpeg;
+
+            if (jpeg == null) {
+
+                String body =
+                        "Camera image not ready yet";
+
+                byte[] bodyBytes =
+                        body.getBytes(
+                                StandardCharsets.UTF_8
+                        );
+
+                String response =
+                        "HTTP/1.1 503 Service Unavailable\r\n" +
+                                "Content-Type: text/plain; charset=UTF-8\r\n" +
+                                "Content-Length: " +
+                                bodyBytes.length +
+                                "\r\n" +
+                                "Connection: close\r\n" +
+                                "\r\n";
+
+                OutputStream outputStream =
+                        socket.getOutputStream();
+
+                outputStream.write(
+                        response.getBytes(
+                                StandardCharsets.UTF_8
+                        )
+                );
+
+                outputStream.write(bodyBytes);
+                outputStream.flush();
+
+                return;
+            }
+
+            OutputStream outputStream =
+                    socket.getOutputStream();
+
+            String headers =
+                    "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: image/jpeg\r\n" +
+                            "Content-Length: " +
+                            jpeg.length +
+                            "\r\n" +
+                            "Connection: close\r\n" +
+                            "\r\n";
+
+            outputStream.write(
+                    headers.getBytes(
+                            StandardCharsets.UTF_8
+                    )
+            );
+
+            outputStream.write(jpeg);
+            outputStream.flush();
+
+        } catch (IOException e) {
+
+            Log.e(
+                    TAG,
+                    "Failed to send preview",
+                    e
+            );
+        }
+    }
+
+    private void sendHtml(Socket socket) {
+
+        try {
+
+            String body = loadHtml();
+
+            byte[] bodyBytes =
+                    body.getBytes(
+                            StandardCharsets.UTF_8
+                    );
+
+            String headers =
+                    "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/html; charset=UTF-8\r\n" +
+                            "Content-Length: " +
+                            bodyBytes.length +
+                            "\r\n" +
+                            "Connection: close\r\n" +
+                            "\r\n";
+
+            OutputStream outputStream =
+                    socket.getOutputStream();
+
+            outputStream.write(
+                    headers.getBytes(
+                            StandardCharsets.UTF_8
+                    )
+            );
+
+            outputStream.write(bodyBytes);
+            outputStream.flush();
+
+        } catch (IOException e) {
+
+            Log.e(
+                    TAG,
+                    "Failed to send HTML",
+                    e
+            );
+        }
+    }
+
+    private String loadHtml() throws IOException {
+
+        InputStream inputStream =
+                context.getAssets().open("index.html");
+
+        ByteArrayOutputStream outputStream =
+                new ByteArrayOutputStream();
+
+        byte[] buffer = new byte[4096];
+
+        int bytesRead;
+
+        while ((bytesRead =
+                inputStream.read(buffer)) != -1) {
+
+            outputStream.write(
+                    buffer,
+                    0,
+                    bytesRead
+            );
+        }
+
+        inputStream.close();
+
+        return new String(
+                outputStream.toByteArray(),
+                StandardCharsets.UTF_8
+        );
+    }
+
+    public void stop() {
+
+        try {
+
+            if (serverSocket != null) {
+                serverSocket.close();
+            }
+
+        } catch (IOException e) {
+
+            Log.e(
+                    TAG,
+                    "Error stopping server",
+                    e
+            );
+        }
+    }
+}
+
+===== FILE: app\src\main\res\drawable\ic_launcher_background.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#3DDC84"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M9,0L9,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,0L19,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M29,0L29,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M39,0L39,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M49,0L49,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M59,0L59,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M69,0L69,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M79,0L79,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M89,0L89,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M99,0L99,108"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,9L108,9"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,19L108,19"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,29L108,29"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,39L108,39"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,49L108,49"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,59L108,59"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,69L108,69"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,79L108,79"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,89L108,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,99L108,99"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,29L89,29"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,39L89,39"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,49L89,49"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,59L89,59"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,69L89,69"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M19,79L89,79"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M29,19L29,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M39,19L39,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M49,19L49,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M59,19L59,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M69,19L69,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M79,19L79,89"
+        android:strokeWidth="0.8"
+        android:strokeColor="#33FFFFFF" />
+</vector>
+
+
+===== FILE: app\src\main\res\drawable\ic_launcher_foreground.xml =====
+
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="85.84757"
+                android:endY="92.4963"
+                android:startX="42.9492"
+                android:startY="49.59793"
+                android:type="linear">
+                <item
+                    android:color="#44000000"
+                    android:offset="0.0" />
+                <item
+                    android:color="#00000000"
+                    android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="nonZero"
+        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
+        android:strokeWidth="1"
+        android:strokeColor="#00000000" />
+</vector>
+
+===== FILE: app\src\main\res\layout\activity_main.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>
+
+===== FILE: app\src\main\res\layout\activity_main2.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    tools:context=".MainActivity">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fitsSystemWindows="true">
+
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize" />
+
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <include layout="@layout/content_main" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fab"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="@dimen/fab_margin"
+        android:layout_marginBottom="16dp"
+        app:srcCompat="@android:drawable/ic_dialog_email" />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>
+
+===== FILE: app\src\main\res\layout\content_main.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+    <fragment
+        android:id="@+id/nav_host_fragment_content_main"
+        android:name="androidx.navigation.fragment.NavHostFragment"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:defaultNavHost="true"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:navGraph="@navigation/nav_graph" />
+</androidx.constraintlayout.widget.ConstraintLayout>
+
+===== FILE: app\src\main\res\layout\fragment_first.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".FirstFragment">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp">
+
+        <Button
+            android:id="@+id/button_first"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/next"
+            app:layout_constraintBottom_toTopOf="@id/textview_first"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <TextView
+            android:id="@+id/textview_first"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/lorem_ipsum"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/button_first" />
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</androidx.core.widget.NestedScrollView>
+
+===== FILE: app\src\main\res\layout\fragment_second.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".SecondFragment">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp">
+
+        <Button
+            android:id="@+id/button_second"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/previous"
+            app:layout_constraintBottom_toTopOf="@id/textview_second"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <TextView
+            android:id="@+id/textview_second"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/lorem_ipsum"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/button_second" />
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</androidx.core.widget.NestedScrollView>
+
+===== FILE: app\src\main\res\mipmap-anydpi\ic_launcher.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+
+===== FILE: app\src\main\res\mipmap-anydpi\ic_launcher_round.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+
+===== FILE: app\src\main\res\navigation\nav_graph.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/FirstFragment">
+
+    <fragment
+        android:id="@+id/FirstFragment"
+        android:name="com.newvision.venusflytrapmonitor.FirstFragment"
+        android:label="@string/first_fragment_label"
+        tools:layout="@layout/fragment_first">
+
+        <action
+            android:id="@+id/action_FirstFragment_to_SecondFragment"
+            app:destination="@id/SecondFragment" />
+    </fragment>
+    <fragment
+        android:id="@+id/SecondFragment"
+        android:name="com.newvision.venusflytrapmonitor.SecondFragment"
+        android:label="@string/second_fragment_label"
+        tools:layout="@layout/fragment_second">
+
+        <action
+            android:id="@+id/action_SecondFragment_to_FirstFragment"
+            app:destination="@id/FirstFragment" />
+    </fragment>
+</navigation>
+
+===== FILE: app\src\main\res\values\colors.xml =====
+
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
+
+===== FILE: app\src\main\res\values\dimens.xml =====
+
+<resources>
+    <dimen name="fab_margin">16dp</dimen>
+</resources>
+
+===== FILE: app\src\main\res\values\strings.xml =====
+
+<resources>
+    <string name="app_name">VenusFlytrapMonitor</string>
+    <!-- Strings used for fragments for navigation -->
+    <string name="first_fragment_label">First Fragment</string>
+    <string name="second_fragment_label">Second Fragment</string>
+    <string name="next">Next</string>
+    <string name="previous">Previous</string>
+
+    <string name="lorem_ipsum">
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam in scelerisque sem. Mauris
+        volutpat, dolor id interdum ullamcorper, risus dolor egestas lectus, sit amet mattis purus
+        dui nec risus. Maecenas non sodales nisi, vel dictum dolor. Class aptent taciti sociosqu ad
+        litora torquent per conubia nostra, per inceptos himenaeos. Suspendisse blandit eleifend
+        diam, vel rutrum tellus vulputate quis. Aliquam eget libero aliquet, imperdiet nisl a,
+        ornare ex. Sed rhoncus est ut libero porta lobortis. Fusce in dictum tellus.\n\n
+        Suspendisse interdum ornare ante. Aliquam nec cursus lorem. Morbi id magna felis. Vivamus
+        egestas, est a condimentum egestas, turpis nisl iaculis ipsum, in dictum tellus dolor sed
+        neque. Morbi tellus erat, dapibus ut sem a, iaculis tincidunt dui. Interdum et malesuada
+        fames ac ante ipsum primis in faucibus. Curabitur et eros porttitor, ultricies urna vitae,
+        molestie nibh. Phasellus at commodo eros, non aliquet metus. Sed maximus nisl nec dolor
+        bibendum, vel congue leo egestas.\n\n
+        Sed interdum tortor nibh, in sagittis risus mollis quis. Curabitur mi odio, condimentum sit
+        amet auctor at, mollis non turpis. Nullam pretium libero vestibulum, finibus orci vel,
+        molestie quam. Fusce blandit tincidunt nulla, quis sollicitudin libero facilisis et. Integer
+        interdum nunc ligula, et fermentum metus hendrerit id. Vestibulum lectus felis, dictum at
+        lacinia sit amet, tristique id quam. Cras eu consequat dui. Suspendisse sodales nunc ligula,
+        in lobortis sem porta sed. Integer id ultrices magna, in luctus elit. Sed a pellentesque
+        est.\n\n
+        Aenean nunc velit, lacinia sed dolor sed, ultrices viverra nulla. Etiam a venenatis nibh.
+        Morbi laoreet, tortor sed facilisis varius, nibh orci rhoncus nulla, id elementum leo dui
+        non lorem. Nam mollis ipsum quis auctor varius. Quisque elementum eu libero sed commodo. In
+        eros nisl, imperdiet vel imperdiet et, scelerisque a mauris. Pellentesque varius ex nunc,
+        quis imperdiet eros placerat ac. Duis finibus orci et est auctor tincidunt. Sed non viverra
+        ipsum. Nunc quis augue egestas, cursus lorem at, molestie sem. Morbi a consectetur ipsum, a
+        placerat diam. Etiam vulputate dignissim convallis. Integer faucibus mauris sit amet finibus
+        convallis.\n\n
+        Phasellus in aliquet mi. Pellentesque habitant morbi tristique senectus et netus et
+        malesuada fames ac turpis egestas. In volutpat arcu ut felis sagittis, in finibus massa
+        gravida. Pellentesque id tellus orci. Integer dictum, lorem sed efficitur ullamcorper,
+        libero justo consectetur ipsum, in mollis nisl ex sed nisl. Donec maximus ullamcorper
+        sodales. Praesent bibendum rhoncus tellus nec feugiat. In a ornare nulla. Donec rhoncus
+        libero vel nunc consequat, quis tincidunt nisl eleifend. Cras bibendum enim a justo luctus
+        vestibulum. Fusce dictum libero quis erat maximus, vitae volutpat diam dignissim.
+    </string>
+</resources>
+
+===== FILE: app\src\main\res\values\themes.xml =====
+
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.VenusFlytrapMonitor" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/purple_500</item>
+        <item name="colorPrimaryVariant">@color/purple_700</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <!-- Secondary brand color. -->
+        <item name="colorSecondary">@color/teal_200</item>
+        <item name="colorSecondaryVariant">@color/teal_700</item>
+        <item name="colorOnSecondary">@color/black</item>
+        <!-- Status bar color. -->
+        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
+        <!-- Customize your theme here. -->
+    </style>
+    <!-- Base application theme. -->
+    <style name="Base.Theme.VenusFlytrapMonitor" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your light theme here. -->
+        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    </style>
+</resources>
+
+===== FILE: app\src\main\res\values-land\dimens.xml =====
+
+<resources>
+    <dimen name="fab_margin">48dp</dimen>
+</resources>
+
+===== FILE: app\src\main\res\values-night\themes.xml =====
+
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.VenusFlytrapMonitor" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/purple_200</item>
+        <item name="colorPrimaryVariant">@color/purple_700</item>
+        <item name="colorOnPrimary">@color/black</item>
+        <!-- Secondary brand color. -->
+        <item name="colorSecondary">@color/teal_200</item>
+        <item name="colorSecondaryVariant">@color/teal_200</item>
+        <item name="colorOnSecondary">@color/black</item>
+        <!-- Status bar color. -->
+        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
+        <!-- Customize your theme here. -->
+    </style>
+    <!-- Base application theme. -->
+    <style name="Base.Theme.VenusFlytrapMonitor" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your dark theme here. -->
+        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
+    </style>
+</resources>
+
+===== FILE: app\src\main\res\values-v23\themes.xml =====
+
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <style name="Theme.VenusFlytrapMonitor" parent="Base.Theme.VenusFlytrapMonitor">
+        <!-- Transparent system bars for edge-to-edge. -->
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
+    </style>
+</resources>
+
+===== FILE: app\src\main\res\values-w1240dp\dimens.xml =====
+
+<resources>
+    <dimen name="fab_margin">200dp</dimen>
+</resources>
+
+===== FILE: app\src\main\res\values-w600dp\dimens.xml =====
+
+<resources>
+    <dimen name="fab_margin">48dp</dimen>
+</resources>
+
+===== FILE: app\src\main\res\xml\backup_rules.xml =====
+
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample backup rules file; uncomment and customize as necessary.
+   See https://developer.android.com/guide/topics/data/autobackup
+   for details.
+   Note: This file is ignored for devices older than API 31
+   See https://developer.android.com/about/versions/12/backup-restore
+-->
+<full-backup-content>
+    <!--
+   <include domain="sharedpref" path="."/>
+   <exclude domain="sharedpref" path="device.xml"/>
+-->
+</full-backup-content>
+
+===== FILE: app\src\main\res\xml\data_extraction_rules.xml =====
+
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample data extraction rules file; uncomment and customize as necessary.
+   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
+   for details.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- TODO: Use <include> and <exclude> to control what is backed up.
+        <include .../>
+        <exclude .../>
+        -->
+    </cloud-backup>
+    <!--
+    <device-transfer>
+        <include .../>
+        <exclude .../>
+    </device-transfer>
+    -->
+</data-extraction-rules>
+
+===== FILE: app\src\test\java\com\newvision\venusflytrapmonitor\ExampleUnitTest.java =====
+
+package com.newvision.venusflytrapmonitor;
+
+import org.junit.Test;
+
+import static org.junit.Assert.*;
+
+/**
+ * Example local unit test, which will execute on the development machine (host).
+ *
+ * @see <a href="http://d.android.com/tools/testing">Testing documentation</a>
+ */
+public class ExampleUnitTest {
+    @Test
+    public void addition_isCorrect() {
+        assertEquals(4, 2 + 2);
+    }
+}
+
+===== FILE: build.gradle =====
+
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+plugins {
+    alias(libs.plugins.android.application) apply false
+}
+
+===== FILE: gradle.properties =====
+
+# Project-wide Gradle settings.
+# IDE (e.g. Android Studio) users:
+# Gradle settings configured through the IDE *will override*
+# any settings specified in this file.
+# For more details on how to configure your build environment visit
+# http://www.gradle.org/docs/current/userguide/build_environment.html
+# Specifies the JVM arguments used for the daemon process.
+# The setting is particularly useful for tweaking memory settings.
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+# When configured, Gradle will run in incubating parallel mode.
+# This option should only be used with decoupled projects. For more details, visit
+# https://developer.android.com/r/tools/gradle-multi-project-decoupled-projects
+# org.gradle.parallel=true
+# AndroidX package structure to make it clearer which packages are bundled with the
+# Android operating system, and which are packaged with your app's APK
+# https://developer.android.com/topic/libraries/support-library/androidx-rn
+android.useAndroidX=true
+# Enables namespacing of each library's R class so that its R class includes only the
+# resources declared in the library itself and none from the library's dependencies,
+# thereby reducing the size of the R class for that library
+android.nonTransitiveRClass=true
+
+===== FILE: gradle\libs.versions.toml =====
+
+[versions]
+agp = "9.0.0-alpha11"
+junit = "4.13.2"
+junitVersion = "1.3.0"
+espressoCore = "3.7.0"
+appcompat = "1.7.1"
+material = "1.13.0"
+constraintlayout = "2.2.1"
+navigationFragment = "2.6.0"
+navigationUi = "2.6.0"
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
+navigation-fragment = { group = "androidx.navigation", name = "navigation-fragment", version.ref = "navigationFragment" }
+navigation-ui = { group = "androidx.navigation", name = "navigation-ui", version.ref = "navigationUi" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+
+
+
+===== FILE: gradle\wrapper\gradle-wrapper.properties =====
+
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-9.0.0-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+
+
+===== FILE: gradlew =====
+
+#!/bin/sh
+
+#
+# Copyright ֲ© 2015 the original authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+##############################################################################
+#
+#   Gradle start up script for POSIX generated by Gradle.
+#
+#   Important for running:
+#
+#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
+#       noncompliant, but you have some other compliant shell such as ksh or
+#       bash, then to run this script, type that shell name before the whole
+#       command line, like:
+#
+#           ksh Gradle
+#
+#       Busybox and similar reduced shells will NOT work, because this script
+#       requires all of these POSIX shell features:
+#         * functions;
+#         * expansions ֲ«$varֲ», ֲ«${var}ֲ», ֲ«${var:-default}ֲ», ֲ«${var+SET}ֲ»,
+#           ֲ«${var#prefix}ֲ», ֲ«${var%suffix}ֲ», and ֲ«$( cmd )ֲ»;
+#         * compound commands having a testable exit status, especially ֲ«caseֲ»;
+#         * various built-in commands including ֲ«commandֲ», ֲ«setֲ», and ֲ«ulimitֲ».
+#
+#   Important for patching:
+#
+#   (2) This script targets any POSIX shell, so it avoids extensions provided
+#       by Bash, Ksh, etc; in particular arrays are avoided.
+#
+#       The "traditional" practice of packing multiple parameters into a
+#       space-separated string is a well documented source of bugs and security
+#       problems, so this is (mostly) avoided, by progressively accumulating
+#       options in "$@", and eventually passing that to Java.
+#
+#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
+#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
+#       see the in-line comments for details.
+#
+#       There are tweaks for specific operating systems such as AIX, CygWin,
+#       Darwin, MinGW, and NonStop.
+#
+#   (3) This script is generated from the Groovy template
+#       https://github.com/gradle/gradle/blob/HEAD/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
+#       within the Gradle project.
+#
+#       You can find Gradle at https://github.com/gradle/gradle/.
+#
+##############################################################################
+
+# Attempt to set APP_HOME
+
+# Resolve links: $0 may be a link
+app_path=$0
+
+# Need this for daisy-chained symlinks.
+while
+    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
+    [ -h "$app_path" ]
+do
+    ls=$( ls -ld "$app_path" )
+    link=${ls#*' -> '}
+    case $link in             #(
+      /*)   app_path=$link ;; #(
+      *)    app_path=$APP_HOME$link ;;
+    esac
+done
+
+# This is normally unused
+# shellcheck disable=SC2034
+APP_BASE_NAME=${0##*/}
+# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
+APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
+
+# Use the maximum available, or set MAX_FD != -1 to use that value.
+MAX_FD=maximum
+
+warn () {
+    echo "$*"
+} >&2
+
+die () {
+    echo
+    echo "$*"
+    echo
+    exit 1
+} >&2
+
+# OS specific support (must be 'true' or 'false').
+cygwin=false
+msys=false
+darwin=false
+nonstop=false
+case "$( uname )" in                #(
+  CYGWIN* )         cygwin=true  ;; #(
+  Darwin* )         darwin=true  ;; #(
+  MSYS* | MINGW* )  msys=true    ;; #(
+  NONSTOP* )        nonstop=true ;;
+esac
+
+CLASSPATH="\\\"\\\""
+
+
+# Determine the Java command to use to start the JVM.
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        # IBM's JDK on AIX uses strange locations for the executables
+        JAVACMD=$JAVA_HOME/jre/sh/java
+    else
+        JAVACMD=$JAVA_HOME/bin/java
+    fi
+    if [ ! -x "$JAVACMD" ] ; then
+        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+    fi
+else
+    JAVACMD=java
+    if ! command -v java >/dev/null 2>&1
+    then
+        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+    fi
+fi
+
+# Increase the maximum file descriptors if we can.
+if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
+    case $MAX_FD in #(
+      max*)
+        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
+        # shellcheck disable=SC2039,SC3045
+        MAX_FD=$( ulimit -H -n ) ||
+            warn "Could not query maximum file descriptor limit"
+    esac
+    case $MAX_FD in  #(
+      '' | soft) :;; #(
+      *)
+        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
+        # shellcheck disable=SC2039,SC3045
+        ulimit -n "$MAX_FD" ||
+            warn "Could not set maximum file descriptor limit to $MAX_FD"
+    esac
+fi
+
+# Collect all arguments for the java command, stacking in reverse order:
+#   * args from the command line
+#   * the main class name
+#   * -classpath
+#   * -D...appname settings
+#   * --module-path (only if needed)
+#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
+
+# For Cygwin or MSYS, switch paths to Windows format before running java
+if "$cygwin" || "$msys" ; then
+    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
+    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )
+
+    JAVACMD=$( cygpath --unix "$JAVACMD" )
+
+    # Now convert the arguments - kludge to limit ourselves to /bin/sh
+    for arg do
+        if
+            case $arg in                                #(
+              -*)   false ;;                            # don't mess with options #(
+              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
+                    [ -e "$t" ] ;;                      #(
+              *)    false ;;
+            esac
+        then
+            arg=$( cygpath --path --ignore --mixed "$arg" )
+        fi
+        # Roll the args list around exactly as many times as the number of
+        # args, so each arg winds up back in the position where it started, but
+        # possibly modified.
+        #
+        # NB: a `for` loop captures its iteration list before it begins, so
+        # changing the positional parameters here affects neither the number of
+        # iterations, nor the values presented in `arg`.
+        shift                   # remove old arg
+        set -- "$@" "$arg"      # push replacement arg
+    done
+fi
+
+
+# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+# Collect all arguments for the java command:
+#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
+#     and any embedded shellness will be escaped.
+#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
+#     treated as '${Hostname}' itself on the command line.
+
+set -- \
+        "-Dorg.gradle.appname=$APP_BASE_NAME" \
+        -classpath "$CLASSPATH" \
+        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
+        "$@"
+
+# Stop when "xargs" is not available.
+if ! command -v xargs >/dev/null 2>&1
+then
+    die "xargs is not available"
+fi
+
+# Use "xargs" to parse quoted args.
+#
+# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
+#
+# In Bash we could simply go:
+#
+#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
+#   set -- "${ARGS[@]}" "$@"
+#
+# but POSIX shell has neither arrays nor command substitution, so instead we
+# post-process each arg (as a line of input to sed) to backslash-escape any
+# character that might be a shell metacharacter, then use eval to reverse
+# that process (while maintaining the separation between arguments), and wrap
+# the whole thing up as a single "set" statement.
+#
+# This will of course break if any of these variables contains a newline or
+# an unmatched quote.
+#
+
+eval "set -- $(
+        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
+        xargs -n1 |
+        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
+        tr '\n' ' '
+    )" '"$@"'
+
+exec "$JAVACMD" "$@"
+
+
+===== FILE: gradlew.bat =====
+
+@rem
+@rem Copyright 2015 the original author or authors.
+@rem
+@rem Licensed under the Apache License, Version 2.0 (the "License");
+@rem you may not use this file except in compliance with the License.
+@rem You may obtain a copy of the License at
+@rem
+@rem      https://www.apache.org/licenses/LICENSE-2.0
+@rem
+@rem Unless required by applicable law or agreed to in writing, software
+@rem distributed under the License is distributed on an "AS IS" BASIS,
+@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+@rem See the License for the specific language governing permissions and
+@rem limitations under the License.
+@rem
+@rem SPDX-License-Identifier: Apache-2.0
+@rem
+
+@if "%DEBUG%"=="" @echo off
+@rem ##########################################################################
+@rem
+@rem  Gradle startup script for Windows
+@rem
+@rem ##########################################################################
+
+@rem Set local scope for the variables with windows NT shell
+if "%OS%"=="Windows_NT" setlocal
+
+set DIRNAME=%~dp0
+if "%DIRNAME%"=="" set DIRNAME=.
+@rem This is normally unused
+set APP_BASE_NAME=%~n0
+set APP_HOME=%DIRNAME%
+
+@rem Resolve any "." and ".." in APP_HOME to make it shorter.
+for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
+
+@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
+
+@rem Find java.exe
+if defined JAVA_HOME goto findJavaFromJavaHome
+
+set JAVA_EXE=java.exe
+%JAVA_EXE% -version >NUL 2>&1
+if %ERRORLEVEL% equ 0 goto execute
+
+echo. 1>&2
+echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
+echo. 1>&2
+echo Please set the JAVA_HOME variable in your environment to match the 1>&2
+echo location of your Java installation. 1>&2
+
+goto fail
+
+:findJavaFromJavaHome
+set JAVA_HOME=%JAVA_HOME:"=%
+set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+
+if exist "%JAVA_EXE%" goto execute
+
+echo. 1>&2
+echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
+echo. 1>&2
+echo Please set the JAVA_HOME variable in your environment to match the 1>&2
+echo location of your Java installation. 1>&2
+
+goto fail
+
+:execute
+@rem Setup the command line
+
+set CLASSPATH=
+
+
+@rem Execute Gradle
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %*
+
+:end
+@rem End local scope for the variables with windows NT shell
+if %ERRORLEVEL% equ 0 goto mainEnd
+
+:fail
+rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
+rem the _cmd.exe /c_ return code!
+set EXIT_CODE=%ERRORLEVEL%
+if %EXIT_CODE% equ 0 set EXIT_CODE=1
+if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
+exit /b %EXIT_CODE%
+
+:mainEnd
+if "%OS%"=="Windows_NT" endlocal
+
+:omega
+
+
+===== FILE: local.properties =====
+
+## This file is automatically generated by Android Studio.
+# Do not modify this file -- YOUR CHANGES WILL BE ERASED!
+#
+# This file should *NOT* be checked into Version Control Systems,
+# as it contains information specific to your local configuration.
+#
+# Location of the SDK. This is only used by Gradle.
+# For customization when using a Version Control System, please read the
+# header note.
+sdk.dir=G\:\\Program Files\\Android\\SDK
+
+===== FILE: settings.gradle =====
+
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "VenusFlytrapMonitor"
+include ':app'
+
+
+
