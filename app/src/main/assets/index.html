@@ -133,6 +133,11 @@
             border-color: #f3a0a0;
         }
 
+        .statusRow.closing {
+            background: #fff6e0;
+            border-color: #f0cf7a;
+        }
+
         .statusRow.open {
             background: #eaf9ee;
             border-color: #abd7b0;
@@ -167,6 +172,16 @@
             font-size: 14px;
         }
 
+        #thresholdForm .sectionLabel {
+            grid-column: 1 / -1;
+            font-size: 12px;
+            font-weight: bold;
+            color: #666;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
     </style>
 
 </head>
@@ -193,23 +208,33 @@
 
         <h2>Detection thresholds</h2>
         <form id="thresholdForm" onsubmit="saveThresholds(event)">
-           <div class="field">
-               <label for="baselineAdaptMeanDiffThreshold">Baseline adapt mean diff</label>
-               <input id="baselineAdaptMeanDiffThreshold" type="number" step="0.1" min="0" />
-           </div>
-           <div class="field">
-               <label for="cellChangeThreshold">Cell change threshold</label>
-               <input id="cellChangeThreshold" type="number" step="0.5" min="0" />
-           </div>
-           <div class="field">
-               <label for="closedMeanDiffThreshold">Trap closed mean diff</label>
-               <input id="closedMeanDiffThreshold" type="number" step="0.5" min="0" />
-           </div>
-           <div class="field">
-               <label for="closedChangedFractionThreshold">Closed changed fraction</label>
-               <input id="closedChangedFractionThreshold" type="number" step="0.01" min="0" max="1" />
-           </div>
-           <button type="submit">Save thresholds</button>
+            <div class="sectionLabel">Per-frame signal</div>
+            <div class="field">
+                <label for="baselineAdaptMeanDiffThreshold">Baseline adapt mean diff</label>
+                <input id="baselineAdaptMeanDiffThreshold" type="number" step="0.1" min="0" />
+            </div>
+            <div class="field">
+                <label for="cellChangeThreshold">Cell change threshold</label>
+                <input id="cellChangeThreshold" type="number" step="0.5" min="0" />
+            </div>
+            <div class="field">
+                <label for="closedMeanDiffThreshold">Trap closed mean diff</label>
+                <input id="closedMeanDiffThreshold" type="number" step="0.5" min="0" />
+            </div>
+            <div class="field">
+                <label for="closedChangedFractionThreshold">Closed changed fraction</label>
+                <input id="closedChangedFractionThreshold" type="number" step="0.01" min="0" max="1" />
+            </div>
+            <div class="sectionLabel">Closing confirmation (hysteresis)</div>
+            <div class="field">
+                <label for="minClosingFrames">Min. consecutive frames</label>
+                <input id="minClosingFrames" type="number" step="1" min="1" />
+            </div>
+            <div class="field">
+                <label for="minClosingDurationMs">Min. duration (ms)</label>
+                <input id="minClosingDurationMs" type="number" step="50" min="0" />
+            </div>
+            <button type="submit">Save thresholds</button>
         </form>
     </div>
 </div>
@@ -1046,6 +1071,20 @@
             });
     }
 
+    /*
+     * Maps a trap's server-reported state to the CSS class and label used
+     * in the status panel. Falls back to the legacy "closed" boolean for
+     * compatibility if an older server build doesn't send "state" yet.
+     */
+    function classifyTrapState(trap) {
+
+        if (trap.state === 'CLOSED' || trap.state === 'CLOSING' || trap.state === 'OPEN') {
+            return trap.state;
+        }
+
+        return trap.closed ? 'CLOSED' : 'OPEN';
+    }
+
     function renderStatus(statusResponse) {
 
         const panel = document.getElementById('statusPanel');
@@ -1062,14 +1101,14 @@
 
         const rows = statusResponse.traps.map(function(trap) {
 
-            const stateLabel = trap.closed ? 'CLOSED' : 'OPEN';
-            const rowClass = trap.closed ? 'closed' : 'open';
+            const state = classifyTrapState(trap);
+            const rowClass = state.toLowerCase();
             const meanDiff = Number(trap.meanDiff || 0).toFixed(1);
             const changedFraction = Number(trap.changedFraction || 0).toFixed(2);
 
             return '<div class="statusRow ' + rowClass + '">' +
                 '<div>Trap ' + trap.id + '</div>' +
-                '<div class="statusState">' + stateLabel + '</div>' +
+                '<div class="statusState">' + state + '</div>' +
                 '<div>Δ=' + meanDiff + '</div>' +
                 '<div>Changed=' + changedFraction + '</div>' +
                 '</div>';
@@ -1108,6 +1147,10 @@
                 document.getElementById('cellChangeThreshold').value = thresholds.cellChangeThreshold;
                 document.getElementById('closedMeanDiffThreshold').value = thresholds.closedMeanDiffThreshold;
                 document.getElementById('closedChangedFractionThreshold').value = thresholds.closedChangedFractionThreshold;
+                document.getElementById('minClosingFrames').value =
+                    thresholds.minClosingFrames !== undefined ? thresholds.minClosingFrames : 5;
+                document.getElementById('minClosingDurationMs').value =
+                    thresholds.minClosingDurationMs !== undefined ? thresholds.minClosingDurationMs : 800;
             })
             .catch(function(error) {
                 console.error('Failed to load thresholds:', error);
@@ -1124,7 +1167,9 @@
             baselineAdaptMeanDiffThreshold: Number(document.getElementById('baselineAdaptMeanDiffThreshold').value),
             cellChangeThreshold: Number(document.getElementById('cellChangeThreshold').value),
             closedMeanDiffThreshold: Number(document.getElementById('closedMeanDiffThreshold').value),
-            closedChangedFractionThreshold: Number(document.getElementById('closedChangedFractionThreshold').value)
+            closedChangedFractionThreshold: Number(document.getElementById('closedChangedFractionThreshold').value),
+            minClosingFrames: Number(document.getElementById('minClosingFrames').value),
+            minClosingDurationMs: Number(document.getElementById('minClosingDurationMs').value)
         };
 
         fetch('/thresholds', {

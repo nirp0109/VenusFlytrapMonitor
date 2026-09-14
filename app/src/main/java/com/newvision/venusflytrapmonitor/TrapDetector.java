@@ -26,11 +26,23 @@ public class TrapDetector {
     // suspected. Small on purpose so brief flickers don't move the baseline.
     private static final float BASELINE_ADAPT_ALPHA = 0.02f;
 
+    public enum TrapState {
+        OPEN,
+        CLOSING,
+        CLOSED
+    }
+
     public static class Thresholds {
         public float baselineAdaptMeanDiffThreshold = 8.0f;
         public float cellChangeThreshold = 15.0f;
         public float closedMeanDiffThreshold = 18.0f;
         public float closedChangedFractionThreshold = 0.18f;
+
+        // Hysteresis: once the per-frame signal first crosses the thresholds
+        // above (OPEN -> CLOSING), CLOSING only confirms to CLOSED once BOTH
+        // of these are satisfied while the signal stays active.
+        public int minClosingFrames = 5;
+        public long minClosingDurationMs = 800;
 
         public JSONObject toJson() {
             try {
@@ -39,6 +51,8 @@ public class TrapDetector {
                 json.put("cellChangeThreshold", cellChangeThreshold);
                 json.put("closedMeanDiffThreshold", closedMeanDiffThreshold);
                 json.put("closedChangedFractionThreshold", closedChangedFractionThreshold);
+                json.put("minClosingFrames", minClosingFrames);
+                json.put("minClosingDurationMs", minClosingDurationMs);
                 return json;
             } catch (JSONException e) {
                 return new JSONObject();
@@ -68,6 +82,14 @@ public class TrapDetector {
                 if (json.has("closedChangedFractionThreshold")) {
                     thresholds.closedChangedFractionThreshold = (float) json.getDouble("closedChangedFractionThreshold");
                 }
+
+                if (json.has("minClosingFrames")) {
+                    thresholds.minClosingFrames = Math.max(1, json.getInt("minClosingFrames"));
+                }
+
+                if (json.has("minClosingDurationMs")) {
+                    thresholds.minClosingDurationMs = Math.max(0, json.getLong("minClosingDurationMs"));
+                }
             } catch (JSONException e) {
                 return thresholds;
             }
@@ -81,9 +103,14 @@ public class TrapDetector {
     // baselineGrids[roiIndex][cellIndex], brightness 0-255 per cell.
     private final float[][] baselineGrids;
     private final int[] calibrationSampleCount;
-    private final boolean[] closedStates;
+    private final TrapState[] trapStates;
     private final float[] lastMeanDiffs;
     private final float[] lastChangedFractions;
+    private final float[] lastLightingShifts;
+
+    // Hysteresis bookkeeping while a ROI is in CLOSING.
+    private final long[] closingStartTime;
+    private final int[] closingFrameCount;
 
     private long calibrationStartTime = 0;
     private boolean calibrated = false;
@@ -98,9 +125,16 @@ public class TrapDetector {
 
         baselineGrids = new float[trapCount][GRID_CELLS];
         calibrationSampleCount = new int[trapCount];
-        closedStates = new boolean[trapCount];
+        trapStates = new TrapState[trapCount];
         lastMeanDiffs = new float[trapCount];
         lastChangedFractions = new float[trapCount];
+        lastLightingShifts = new float[trapCount];
+        closingStartTime = new long[trapCount];
+        closingFrameCount = new int[trapCount];
+
+        for (int i = 0; i < trapCount; i++) {
+            trapStates[i] = TrapState.OPEN;
+        }
     }
 
     public boolean hasConfiguredRois() {
@@ -144,9 +178,16 @@ public class TrapDetector {
             try {
                 JSONObject item = new JSONObject();
                 item.put("id", trap.optInt("id", i + 1));
-                item.put("closed", closedStates[i]);
+                item.put("state", trapStates[i].name());
+                item.put("closed", trapStates[i] == TrapState.CLOSED);
                 item.put("meanDiff", lastMeanDiffs[i]);
                 item.put("changedFraction", lastChangedFractions[i]);
+                // Diagnostic only: how much of the frame's overall
+                // brightness shift (e.g. a light being turned on/off) was
+                // subtracted out before computing meanDiff/changedFraction
+                // above. A large lightingShift with a small meanDiff is the
+                // normalization working as intended.
+                item.put("lightingShift", lastLightingShifts[i]);
                 item.put("calibrated", calibrated);
                 items.put(item);
             } catch (JSONException e) {
@@ -161,10 +202,20 @@ public class TrapDetector {
         for (int i = 0; i < traps.length(); i++) {
             JSONObject trap = traps.optJSONObject(i);
             if (trap != null && trap.optInt("id", i + 1) == trapId) {
-                return closedStates[i];
+                return trapStates[i] == TrapState.CLOSED;
             }
         }
         return false;
+    }
+
+    public TrapState getTrapState(int trapId) {
+        for (int i = 0; i < traps.length(); i++) {
+            JSONObject trap = traps.optJSONObject(i);
+            if (trap != null && trap.optInt("id", i + 1) == trapId) {
+                return trapStates[i];
+            }
+        }
+        return TrapState.OPEN;
     }
 
     public void analyzeFrame(Bitmap bitmap) {
@@ -203,12 +254,36 @@ public class TrapDetector {
 
                 } else {
 
+                    // Uniform-illumination normalization: estimate how much
+                    // the ROI's overall brightness shifted vs baseline (e.g.
+                    // a room light being switched on/off shifts every cell
+                    // by roughly the same amount), and subtract that shift
+                    // out before comparing individual cells. This way a
+                    // global lighting change - which affects all cells
+                    // equally - cancels out to near zero, while a real trap
+                    // closure - which changes some cells much more than
+                    // others - still shows up clearly.
+                    float currentMean = 0f;
+                    float baselineMean = 0f;
+
+                    for (int c = 0; c < GRID_CELLS; c++) {
+                        currentMean += currentGrid[c];
+                        baselineMean += baselineGrids[i][c];
+                    }
+
+                    currentMean /= GRID_CELLS;
+                    baselineMean /= GRID_CELLS;
+
+                    float lightingShift = currentMean - baselineMean;
+                    lastLightingShifts[i] = lightingShift;
+
                     float meanDiff = 0f;
                     int changedCells = 0;
 
                     for (int c = 0; c < GRID_CELLS; c++) {
 
-                        float cellDiff = Math.abs(currentGrid[c] - baselineGrids[i][c]);
+                        float normalizedCell = currentGrid[c] - lightingShift;
+                        float cellDiff = Math.abs(normalizedCell - baselineGrids[i][c]);
                         meanDiff += cellDiff;
 
                         if (cellDiff > thresholds.cellChangeThreshold) {
@@ -221,11 +296,20 @@ public class TrapDetector {
                     lastMeanDiffs[i] = meanDiff;
                     lastChangedFractions[i] = changedFraction;
 
-                    boolean trapClosed = meanDiff >= thresholds.closedMeanDiffThreshold
+                    boolean signalActive = meanDiff >= thresholds.closedMeanDiffThreshold
                             && changedFraction >= thresholds.closedChangedFractionThreshold;
-                    closedStates[i] = trapClosed;
 
-                    if (meanDiff < thresholds.baselineAdaptMeanDiffThreshold) {
+                    TrapState previousState = trapStates[i];
+                    updateTrapState(i, signalActive, now);
+
+                    // Baseline is only allowed to adapt while OPEN, using the
+                    // normalized meanDiff - so genuine lighting shifts (now
+                    // already cancelled out above) no longer need to "wait"
+                    // for this slow adapt to correct them; this remains for
+                    // real slow spatial drift (e.g. a shadow's path changing
+                    // over the day, minor camera drift, dust).
+                    if (trapStates[i] == TrapState.OPEN
+                            && meanDiff < thresholds.baselineAdaptMeanDiffThreshold) {
 
                         for (int c = 0; c < GRID_CELLS; c++) {
                             baselineGrids[i][c] =
@@ -234,11 +318,16 @@ public class TrapDetector {
                         }
                     }
 
-                    if (shouldLog) {
+                    if (shouldLog || trapStates[i] != previousState) {
                         Log.d(TAG, "ROI " + trap.getInt("id")
                                 + ": meanDiff=" + meanDiff
                                 + ", changedFraction=" + changedFraction
-                                + ", closed=" + trapClosed);
+                                + ", lightingShift=" + lightingShift
+                                + ", state=" + trapStates[i]
+                                + (trapStates[i] == TrapState.CLOSING
+                                ? " (frames=" + closingFrameCount[i]
+                                + ", elapsedMs=" + (now - closingStartTime[i]) + ")"
+                                : ""));
                     }
                 }
             }
@@ -272,6 +361,45 @@ public class TrapDetector {
         }
     }
 
+    // Advances trapStates[i] through OPEN -> CLOSING -> CLOSED based on the
+    // current frame's signalActive flag. CLOSED is sticky (a trap does not
+    // spontaneously revert once confirmed shut); CLOSING reverts straight
+    // back to OPEN if the signal drops before confirmation, treating it as
+    // a spurious spike rather than a real event.
+    private void updateTrapState(int i, boolean signalActive, long now) {
+
+        switch (trapStates[i]) {
+
+            case OPEN:
+                if (signalActive) {
+                    trapStates[i] = TrapState.CLOSING;
+                    closingStartTime[i] = now;
+                    closingFrameCount[i] = 1;
+                }
+                break;
+
+            case CLOSING:
+                if (signalActive) {
+                    closingFrameCount[i]++;
+
+                    long elapsed = now - closingStartTime[i];
+
+                    if (closingFrameCount[i] >= thresholds.minClosingFrames
+                            && elapsed >= thresholds.minClosingDurationMs) {
+                        trapStates[i] = TrapState.CLOSED;
+                    }
+                } else {
+                    trapStates[i] = TrapState.OPEN;
+                    closingFrameCount[i] = 0;
+                }
+                break;
+
+            case CLOSED:
+                // Sticky: revisit only if automatic reopening is needed.
+                break;
+        }
+    }
+
     private int[] roiPixelBounds(JSONObject trap, Bitmap bitmap) throws Exception {
 
         float left = (float) trap.getDouble("left");
@@ -287,9 +415,6 @@ public class TrapDetector {
         return new int[]{x, y, width, height};
     }
 
-    // Resamples the ROI into a GRID_SIZE x GRID_SIZE grid of average
-    // grayscale brightness values (0-255), giving a coarse spatial signature
-    // instead of a single overall brightness number.
     private float[] computeGrid(Bitmap bitmap, int x, int y, int width, int height) {
 
         float[] grid = new float[GRID_CELLS];

@@ -1,5 +1,6 @@
 package com.newvision.venusflytrapmonitor;
 
+import android.graphics.Color;
 import android.graphics.Matrix;
 import android.Manifest;
 import android.content.SharedPreferences;
@@ -10,6 +11,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 
 import androidx.activity.result.ActivityResultLauncher;
@@ -38,7 +41,23 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "VenusMonitor";
 
+    // Frames are only fully processed (bitmap conversion, detection, JPEG
+    // encode) at most this often. Nothing currently consumes frames faster
+    // than this (the browser polls /preview every 300ms), so processing
+    // every camera frame - likely ~30fps - was pure wasted CPU/battery.
+    private static final long FRAME_PROCESS_INTERVAL_MS = 300;
+
+    // Fallback dim level, kept as a safety net underneath the black overlay
+    // below (e.g. in case the overlay doesn't fully cover system bars on
+    // some device). The overlay, not this, is what actually saves battery
+    // on an AMOLED panel - dimming alone still renders a bright, colorful
+    // camera image at reduced scale, which still draws real power per
+    // pixel.
+    private static final float DIMMED_SCREEN_BRIGHTNESS = 0.01f;
+
     private PreviewView previewView;
+
+    private View blackoutView;
 
     private ExecutorService analysisExecutor;
 
@@ -46,13 +65,19 @@ public class MainActivity extends AppCompatActivity {
 
     private TrapDetector trapDetector;
 
+    private ProcessCameraProvider cameraProvider;
+
     private Camera camera;
+
+    private boolean previewBound = false;
 
     private float currentZoomRatio = 1.0f;
 
     private float pinchStartDistance = 0.0f;
 
     private byte[] latestJpeg;
+
+    private long lastProcessedFrameTime = 0;
 
     private final Handler batteryHandler = new Handler(Looper.getMainLooper());
     private final Runnable batteryRefreshRunnable = new Runnable() {
@@ -97,6 +122,23 @@ public class MainActivity extends AppCompatActivity {
 
         previewView.setOnTouchListener(this::handlePreviewTouch);
 
+        // Solid black overlay, added on top of the whole window content
+        // regardless of activity_main.xml's layout structure. This is what
+        // actually saves power on an AMOLED display once monitoring is
+        // unattended - true black pixels draw near-zero current, unlike a
+        // dimmed-but-still-colorful camera image.
+        blackoutView = new View(this);
+        blackoutView.setBackgroundColor(Color.BLACK);
+        blackoutView.setVisibility(View.GONE);
+
+        addContentView(
+                blackoutView,
+                new ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                )
+        );
+
         analysisExecutor =
                 Executors.newSingleThreadExecutor();
 
@@ -134,12 +176,42 @@ public class MainActivity extends AppCompatActivity {
         trapDetector = new TrapDetector(traps);
         webServer.setTrapDetector(trapDetector);
 
+        applyUnattendedDisplayState();
+
         Log.d(
                 TAG,
                 "Reloaded trap configuration: " +
                         traps.length() +
                         " ROI(s)"
         );
+    }
+
+    // Once at least one ROI is saved, zoom/ROI editing is already locked
+    // (see WebServer's /zoom rule) and there is nothing left on-screen that
+    // needs to be visible. At that point: black out the display for real
+    // (not just dim it), and drop the CameraX Preview use case entirely so
+    // the display-compositing pipeline isn't doing that work either.
+    // Reverts back to a normal, visible preview whenever there are no
+    // saved ROIs (setup mode), since that's when the live image is
+    // actually being looked at for zoom/ROI placement.
+    private void applyUnattendedDisplayState() {
+
+        boolean hasRois =
+                trapDetector != null && trapDetector.hasConfiguredRois();
+
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+
+        params.screenBrightness = hasRois
+                ? DIMMED_SCREEN_BRIGHTNESS
+                : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+
+        getWindow().setAttributes(params);
+
+        if (blackoutView != null) {
+            blackoutView.setVisibility(hasRois ? View.VISIBLE : View.GONE);
+        }
+
+        applyCameraBinding();
     }
 
     private void loadTrapConfiguration() {
@@ -274,13 +346,10 @@ public class MainActivity extends AppCompatActivity {
 
                     try {
 
-                        ProcessCameraProvider
-                                cameraProvider =
+                        cameraProvider =
                                 cameraProviderFuture.get();
 
-                        bindCamera(
-                                cameraProvider
-                        );
+                        applyCameraBinding();
 
                     } catch (Exception e) {
 
@@ -296,22 +365,25 @@ public class MainActivity extends AppCompatActivity {
         );
     }
 
-    private void bindCamera(
-            ProcessCameraProvider cameraProvider
-    ) {
+    // Binds ImageAnalysis always, and additionally binds Preview only while
+    // there are no saved ROIs (setup mode). Rebinding only happens when the
+    // desired state actually changes, to avoid unnecessarily restarting the
+    // camera pipeline on every ROI save.
+    private void applyCameraBinding() {
 
-        Preview preview =
-                new Preview.Builder()
-                        .setTargetRotation(
-                                getWindowManager()
-                                        .getDefaultDisplay()
-                                        .getRotation()
-                        )
-                        .build();
+        if (cameraProvider == null) {
+            return;
+        }
 
-        preview.setSurfaceProvider(
-                previewView.getSurfaceProvider()
-        );
+        boolean hasRois =
+                trapDetector != null && trapDetector.hasConfiguredRois();
+
+        boolean wantPreview = !hasRois;
+
+        if (camera != null && wantPreview == previewBound) {
+            // Already in the desired state.
+            return;
+        }
 
         ImageAnalysis imageAnalysis =
                 new ImageAnalysis.Builder()
@@ -326,8 +398,6 @@ public class MainActivity extends AppCompatActivity {
                         )
                         .build();
 
-
-
         imageAnalysis.setAnalyzer(
                 analysisExecutor,
                 this::analyzeFrame
@@ -338,12 +408,42 @@ public class MainActivity extends AppCompatActivity {
 
         cameraProvider.unbindAll();
 
-        camera = cameraProvider.bindToLifecycle(
-                this,
-                cameraSelector,
-                preview,
-                imageAnalysis
-        );
+        if (wantPreview) {
+
+            Preview preview =
+                    new Preview.Builder()
+                            .setTargetRotation(
+                                    getWindowManager()
+                                            .getDefaultDisplay()
+                                            .getRotation()
+                            )
+                            .build();
+
+            preview.setSurfaceProvider(
+                    previewView.getSurfaceProvider()
+            );
+
+            camera = cameraProvider.bindToLifecycle(
+                    this,
+                    cameraSelector,
+                    preview,
+                    imageAnalysis
+            );
+
+        } else {
+
+            // No Preview use case at all - the on-screen PreviewView isn't
+            // needed once ROIs are locked, and this also drops the
+            // display-compositing work that binding it would otherwise
+            // require, regardless of the blackout overlay's visibility.
+            camera = cameraProvider.bindToLifecycle(
+                    this,
+                    cameraSelector,
+                    imageAnalysis
+            );
+        }
+
+        previewBound = wantPreview;
 
         applyZoomRatio(currentZoomRatio);
     }
@@ -375,6 +475,17 @@ public class MainActivity extends AppCompatActivity {
     private void analyzeFrame(
             ImageProxy imageProxy
     ) {
+
+        // Throttle: skip full processing for frames arriving faster than
+        // FRAME_PROCESS_INTERVAL_MS.
+        long now = System.currentTimeMillis();
+
+        if (now - lastProcessedFrameTime < FRAME_PROCESS_INTERVAL_MS) {
+            imageProxy.close();
+            return;
+        }
+
+        lastProcessedFrameTime = now;
 
         Bitmap bitmap = null;
 
