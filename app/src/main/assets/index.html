@@ -103,12 +103,20 @@
         }
 
         #controls {
-            margin-top: 15px;
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            display: flex;
+            gap: 8px;
+            background: rgba(255,255,255,0.85);
+            padding: 6px;
+            border-radius: 6px;
+            z-index: 50;
         }
 
         button {
-            padding: 8px 14px;
-            margin-right: 8px;
+            padding: 8px 10px;
+            margin: 0;
         }
 
         #statusPanel {
@@ -182,6 +190,68 @@
             letter-spacing: 0.03em;
         }
 
+        #eventsPanel {
+            margin-top: 10px;
+            display: grid;
+            gap: 8px;
+            max-width: 640px;
+        }
+
+        .eventRow {
+            border: 1px solid #d8d8d8;
+            background: #f9f9f9;
+            border-radius: 6px;
+            padding: 8px 12px;
+        }
+
+        .eventRow.active {
+            background: #fff6e0;
+            border-color: #f0cf7a;
+        }
+
+        .eventRow.finalized {
+            background: #eaf9ee;
+            border-color: #abd7b0;
+        }
+
+        .eventHeader {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .eventTitle {
+            font-weight: bold;
+        }
+
+        .eventState {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .eventMeta {
+            font-size: 12px;
+            color: #555;
+            margin-top: 4px;
+        }
+
+        .eventSegments {
+            margin-top: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .eventSegments a {
+            font-size: 12px;
+        }
+
+        #eventsEmpty {
+            color: #666;
+            font-size: 13px;
+        }
+
     </style>
 
 </head>
@@ -200,11 +270,40 @@
 
         <!-- ROI elements are created by JavaScript -->
 
+        <div id="controls">
+
+            <button id="zoomOutButton"
+                    onclick="setZoomLevel(zoomLevel / 1.25)">
+                Zoom Out
+            </button>
+
+            <button id="zoomInButton"
+                    onclick="setZoomLevel(zoomLevel * 1.25)">
+                Zoom In
+            </button>
+
+            <button onclick="addTrap()">
+                Add Trap
+            </button>
+
+            <button onclick="deleteSelected()">
+                Delete Selected
+            </button>
+
+            <button onclick="saveTraps()">
+                Save
+            </button>
+
+        </div>
+
     </div>
 
     <div id="detailsPanel">
         <h2>Trap state</h2>
         <div id="statusPanel"></div>
+
+        <h2>Recent events</h2>
+        <div id="eventsPanel"></div>
 
         <h2>Detection thresholds</h2>
         <form id="thresholdForm" onsubmit="saveThresholds(event)">
@@ -237,32 +336,6 @@
             <button type="submit">Save thresholds</button>
         </form>
     </div>
-</div>
-
-<div id="controls">
-
-    <button id="zoomOutButton"
-            onclick="setZoomLevel(zoomLevel / 1.25)">
-        Zoom Out
-    </button>
-
-    <button id="zoomInButton"
-            onclick="setZoomLevel(zoomLevel * 1.25)">
-        Zoom In
-    </button>
-
-    <button onclick="addTrap()">
-        Add Trap
-    </button>
-
-    <button onclick="deleteSelected()">
-        Delete Selected
-    </button>
-
-    <button onclick="saveTraps()">
-        Save
-    </button>
-
 </div>
 
 <script>
@@ -928,6 +1001,20 @@
         nextTrapId = document.querySelectorAll('.roi').length + 1;
     }
 
+    function handleTrapKeyDelete(event) {
+        const isDeleteKey =
+            event.key === 'Delete' ||
+            event.key === 'Del' ||
+            event.code === 'Delete';
+
+        if (!isDeleteKey || selectedRoi === null) {
+            return;
+        }
+
+        event.preventDefault();
+        deleteSelected();
+    }
+
     function clearTrapRois() {
         const rois = document.querySelectorAll('.roi');
         rois.forEach(function(roi) {
@@ -1090,7 +1177,7 @@
         const panel = document.getElementById('statusPanel');
 
         if (!statusResponse || !Array.isArray(statusResponse.traps)) {
-            panel.innerHTML = '<div class="statusRow open"><div>Waiting for trap data…</div></div>';
+            panel.innerHTML = '<div class="statusRow open"><div>Waiting for trap dataג€¦</div></div>';
             return;
         }
 
@@ -1109,7 +1196,7 @@
             return '<div class="statusRow ' + rowClass + '">' +
                 '<div>Trap ' + trap.id + '</div>' +
                 '<div class="statusState">' + state + '</div>' +
-                '<div>Δ=' + meanDiff + '</div>' +
+                '<div>־”=' + meanDiff + '</div>' +
                 '<div>Changed=' + changedFraction + '</div>' +
                 '</div>';
         });
@@ -1130,6 +1217,139 @@
             })
             .catch(function(error) {
                 console.error('Failed to load trap status:', error);
+            });
+    }
+
+    /*
+     * Formats an eventId like "trap2_20260918_143012" into a short,
+     * readable label. Falls back to the raw eventId if it doesn't match
+     * the expected pattern.
+     */
+    function formatEventLabel(eventId) {
+
+        const match = /^trap(\d+)_(\d{8})_(\d{6})$/.exec(eventId || '');
+
+        if (!match) {
+            return eventId;
+        }
+
+        const trapId = match[1];
+        const datePart = match[2];
+        const timePart = match[3];
+
+        const year = datePart.slice(0, 4);
+        const month = datePart.slice(4, 6);
+        const day = datePart.slice(6, 8);
+
+        const hour = timePart.slice(0, 2);
+        const minute = timePart.slice(2, 4);
+        const second = timePart.slice(4, 6);
+
+        return 'Trap ' + trapId + ' — ' +
+            year + '-' + month + '-' + day + ' ' +
+            hour + ':' + minute + ':' + second;
+    }
+
+    function renderEvents(events) {
+
+        const panel = document.getElementById('eventsPanel');
+
+        if (!Array.isArray(events)) {
+            panel.innerHTML = '<div id="eventsEmpty">Failed to load events.</div>';
+            return;
+        }
+
+        if (events.length === 0) {
+            panel.innerHTML = '<div id="eventsEmpty">No events recorded yet.</div>';
+            return;
+        }
+
+        const rows = events.map(function(event) {
+
+            const finalized = event.finalized === true;
+            const rowClass = finalized ? 'finalized' : 'active';
+            const label = formatEventLabel(event.eventId);
+
+            let metaHtml = '';
+            let segmentsHtml = '';
+
+            if (finalized && event.metadata) {
+
+                const segments = Array.isArray(event.metadata.segments) ? event.metadata.segments : [];
+
+                metaHtml = '<div class="eventMeta">' + segments.length + ' segment(s)' + '</div>';
+
+                segmentsHtml = '<div class="eventSegments">';
+
+                segments.forEach(function(fileName) {
+                    const url = '/events/' + encodeURIComponent(event.eventId) + '/' + encodeURIComponent(fileName);
+                    const escEventId = event.eventId.replace(/'/g, "\\'" );
+                    const escFileName = fileName.replace(/'/g, "\\'");
+                    segmentsHtml += '<div style="display:inline-flex;align-items:center;gap:6px;margin-right:6px;">' +
+                        '<a href="' + url + '" target="_blank">' + fileName + '</a>' +
+                        '<button onclick="deleteEventFile(\'' + escEventId + '\', \'" + escFileName + "\')">Delete</button>' +
+                        '</div>';
+                });
+
+                segmentsHtml += '</div>';
+
+            } else {
+
+                const segmentCount = Number(event.segmentCount || 0);
+                metaHtml = '<div class="eventMeta">Recording — ' + segmentCount + ' segment(s) so far</div>';
+            }
+
+            const escEvent = event.eventId.replace(/'/g, "\\'");
+            const deleteBtn = '<button style="margin-left:8px;" onclick="deleteEvent(\'' + escEvent + '\')">Delete Event</button>';
+
+            return '<div class="eventRow ' + rowClass + '">' +
+                '<div class="eventHeader">' +
+                '<div class="eventTitle">' + label + '</div>' +
+                '<div class="eventState">' + (finalized ? 'Finalized' : 'Recording') + deleteBtn + '</div>' +
+                '</div>' +
+                metaHtml +
+                segmentsHtml +
+                '</div>';
+        });
+
+        panel.innerHTML = rows.join('');
+    }
+
+    function deleteEvent(eventId) {
+        if (!confirm('Delete event ' + eventId + '?')) return;
+        fetch('/events/' + encodeURIComponent(eventId), { method: 'DELETE' })
+            .then(function(response) {
+                if (!response.ok) throw new Error('Server returned ' + response.status);
+                return response.text();
+            })
+            .then(function() { loadEvents(); })
+            .catch(function(error) { console.error('Failed to delete event:', error); alert('Failed to delete event: ' + error.message); });
+    }
+
+    function deleteEventFile(eventId, fileName) {
+        if (!confirm('Delete file ' + fileName + ' from ' + eventId + '?')) return;
+        fetch('/events/' + encodeURIComponent(eventId) + '/' + encodeURIComponent(fileName), { method: 'DELETE' })
+            .then(function(response) {
+                if (!response.ok) throw new Error('Server returned ' + response.status);
+                return response.text();
+            })
+            .then(function() { loadEvents(); })
+            .catch(function(error) { console.error('Failed to delete file:', error); alert('Failed to delete file: ' + error.message); });
+    }
+
+    function loadEvents() {
+        fetch('/events')
+            .then(function(response) {
+                if (!response.ok) {
+                    throw new Error('Server returned ' + response.status);
+                }
+                return response.json();
+            })
+            .then(function(events) {
+                renderEvents(events);
+            })
+            .catch(function(error) {
+                console.error('Failed to load events:', error);
             });
     }
 
@@ -1333,10 +1553,13 @@
      * Load persisted ROIs and zoom when the
      * browser page starts.
      */
+    document.addEventListener('keydown', handleTrapKeyDelete);
+
     loadThresholds();
     loadTraps();
     loadStatus();
     loadBattery();
+    loadEvents();
 
     updateZoomButtons();
 
@@ -1359,6 +1582,7 @@
 
     setInterval(loadStatus, 1000);
     setInterval(loadBattery, 15000);
+    setInterval(loadEvents, 5000);
 
 </script>
 

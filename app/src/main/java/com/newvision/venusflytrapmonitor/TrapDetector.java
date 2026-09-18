@@ -32,6 +32,10 @@ public class TrapDetector {
         CLOSED
     }
 
+    public interface TrapStateListener {
+        void onStateChanged(int trapId, TrapState oldState, TrapState newState);
+    }
+
     public static class Thresholds {
         public float baselineAdaptMeanDiffThreshold = 8.0f;
         public float cellChangeThreshold = 15.0f;
@@ -116,6 +120,11 @@ public class TrapDetector {
     private boolean calibrated = false;
     private long lastLogTime = 0;
     private Thresholds thresholds = new Thresholds();
+    private TrapStateListener stateListener;
+
+    public void setStateListener(TrapStateListener listener) {
+        this.stateListener = listener;
+    }
 
     public TrapDetector(JSONArray traps) {
 
@@ -301,6 +310,14 @@ public class TrapDetector {
 
                     TrapState previousState = trapStates[i];
                     updateTrapState(i, signalActive, now);
+
+                    if (trapStates[i] != previousState && stateListener != null) {
+                        stateListener.onStateChanged(
+                                trap.optInt("id", i + 1),
+                                previousState,
+                                trapStates[i]
+                        );
+                    }
 
                     // Baseline is only allowed to adapt while OPEN, using the
                     // normalized meanDiff - so genuine lighting shifts (now

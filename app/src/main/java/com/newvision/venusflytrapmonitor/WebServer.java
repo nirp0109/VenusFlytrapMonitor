@@ -9,6 +9,8 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -16,6 +18,7 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.function.Consumer;
 
@@ -36,6 +39,7 @@ public class WebServer {
     private volatile Consumer<JSONArray> trapConfigChangeListener;
     private volatile TrapDetector trapDetector;
     private volatile int batteryLevelPercent = 0;
+    private volatile EventRecorder eventRecorder;
 
     public WebServer(Context context) {
         this.context = context.getApplicationContext();
@@ -61,6 +65,10 @@ public class WebServer {
 
     public void setBatteryLevelPercent(int percent) {
         batteryLevelPercent = Math.max(0, Math.min(100, percent));
+    }
+
+    public void setEventRecorder(EventRecorder recorder) {
+        eventRecorder = recorder;
     }
 
     public void setTrapDetector(TrapDetector detector) {
@@ -199,6 +207,18 @@ public class WebServer {
             ) {
 
                 sendJson(socket, getBatteryPayload());
+
+            } else if (
+                    requestLine.startsWith("GET /events")
+            ) {
+
+                handleEventsGetRequest(socket, requestLine);
+
+            } else if (
+                    requestLine.startsWith("DELETE /events")
+            ) {
+
+                handleEventsDeleteRequest(socket, requestLine);
 
             } else if (
                     requestLine.startsWith("POST /traps")
@@ -386,6 +406,277 @@ public class WebServer {
         }
     }
 
+    // Dispatches GET /events (list) vs GET /events/<eventId>/<filename>
+    // (serve one file). requestLine looks like "GET /events/foo/bar.mp4
+    // HTTP/1.1" - split on spaces to isolate the path.
+    private void handleEventsGetRequest(
+            Socket socket,
+            String requestLine
+    ) throws IOException {
+
+        String[] requestParts = requestLine.split(" ");
+
+        if (requestParts.length < 2) {
+            sendText(socket, "Bad request", 400);
+            return;
+        }
+
+        String path = requestParts[1];
+
+        if (path.equals("/events") || path.equals("/events/")) {
+            sendJson(socket, getEventsListPayload());
+        } else if (path.startsWith("/events/")) {
+            handleEventFileRequest(socket, path);
+        } else {
+            sendText(socket, "Not found", 404);
+        }
+    }
+
+    // Lists every event folder under EventRecorder's events directory.
+    // Finalized events (metadata.json present) include their full metadata;
+    // still-active events report just a segment count, since metadata.json
+    // is only written once the event's post-event window has closed.
+    private String getEventsListPayload() {
+
+        JSONArray events = new JSONArray();
+
+        try {
+            if (eventRecorder == null) {
+                return events.toString();
+            }
+
+            File eventsDir = eventRecorder.getEventsDir();
+            File[] eventFolders = eventsDir.listFiles();
+
+            if (eventFolders != null) {
+
+                Arrays.sort(
+                        eventFolders,
+                        (a, b) -> b.getName().compareTo(a.getName())
+                );
+
+                for (File folder : eventFolders) {
+
+                    if (!folder.isDirectory()) {
+                        continue;
+                    }
+
+                    JSONObject entry = new JSONObject();
+                    entry.put("eventId", folder.getName());
+
+                    File metadataFile = new File(folder, "metadata.json");
+
+                    if (metadataFile.exists()) {
+
+                        String metadataText =
+                                new String(
+                                        readFileBytes(metadataFile),
+                                        StandardCharsets.UTF_8
+                                );
+
+                        entry.put("finalized", true);
+                        entry.put("metadata", new JSONObject(metadataText));
+
+                    } else {
+
+                        entry.put("finalized", false);
+
+                        File[] segmentFiles = folder.listFiles(
+                                (dir, name) -> name.endsWith(".mp4")
+                        );
+
+                        entry.put(
+                                "segmentCount",
+                                segmentFiles != null ? segmentFiles.length : 0
+                        );
+                    }
+
+                    events.put(entry);
+                }
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to build events payload", e);
+        }
+
+        return events.toString();
+    }
+
+    // Serves one file (a segment .mp4 or metadata.json) from inside an
+    // event folder. Rejects any path containing ".." or an extra "/" in the
+    // filename component, since eventId/fileName come straight from the
+    // request path.
+    private void handleEventFileRequest(
+            Socket socket,
+            String requestPath
+    ) throws IOException {
+
+        if (eventRecorder == null) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String remainder = requestPath.substring("/events/".length());
+        String[] parts = remainder.split("/", 2);
+
+        if (parts.length < 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String eventId = parts[0];
+        String fileName = parts[1];
+
+        if (eventId.contains("..")
+                || fileName.contains("..")
+                || fileName.contains("/")) {
+            sendText(socket, "Invalid path", 400);
+            return;
+        }
+
+        File eventFolder = new File(eventRecorder.getEventsDir(), eventId);
+        File requestedFile = new File(eventFolder, fileName);
+
+        if (!requestedFile.exists() || !requestedFile.isFile()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String contentType = fileName.endsWith(".json")
+                ? "application/json; charset=UTF-8"
+                : "video/mp4";
+
+        sendFile(socket, requestedFile, contentType);
+    }
+
+    private void handleEventsDeleteRequest(
+            Socket socket,
+            String requestLine
+    ) throws IOException {
+
+        String[] requestParts = requestLine.split(" ");
+
+        if (requestParts.length < 2) {
+            sendText(socket, "Bad request", 400);
+            return;
+        }
+
+        String path = requestParts[1];
+
+        if (!path.startsWith("/events/")) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String remainder = path.substring("/events/".length());
+        String[] parts = remainder.split("/", 2);
+
+        String eventId = parts[0];
+
+        if (eventId.isEmpty() || eventId.contains("..")) {
+            sendText(socket, "Invalid path", 400);
+            return;
+        }
+
+        if (eventRecorder == null) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        File eventFolder = new File(eventRecorder.getEventsDir(), eventId);
+
+        if (!eventFolder.exists() || !eventFolder.isDirectory()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        // If only the eventId is provided, delete the whole event folder
+        if (parts.length == 1) {
+
+            boolean ok = deleteRecursively(eventFolder);
+
+            if (!ok) {
+                sendText(socket, "Failed to delete event", 500);
+                return;
+            }
+
+            sendText(socket, "Event deleted");
+            return;
+        }
+
+        // Otherwise delete a specific file inside the event folder
+        String fileName = parts[1];
+
+        if (fileName.isEmpty() || fileName.contains("..") || fileName.contains("/")) {
+            sendText(socket, "Invalid path", 400);
+            return;
+        }
+
+        File target = new File(eventFolder, fileName);
+
+        if (!target.exists() || !target.isFile()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        if (!target.delete()) {
+            sendText(socket, "Failed to delete file", 500);
+            return;
+        }
+
+        sendText(socket, "File deleted");
+    }
+
+    private boolean deleteRecursively(File f) {
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File c : children) {
+                    if (!deleteRecursively(c)) return false;
+                }
+            }
+        }
+        return f.delete();
+    }
+
+    private byte[] readFileBytes(File file) throws IOException {
+
+        try (InputStream inputStream = new FileInputStream(file)) {
+
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
+
+            return outputStream.toByteArray();
+        }
+    }
+
+    private void sendFile(
+            Socket socket,
+            File file,
+            String contentType
+    ) throws IOException {
+
+        byte[] data = readFileBytes(file);
+
+        String headers =
+                "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: " + contentType + "\r\n" +
+                        "Content-Length: " + data.length + "\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n";
+
+        OutputStream outputStream = socket.getOutputStream();
+
+        outputStream.write(headers.getBytes(StandardCharsets.UTF_8));
+        outputStream.write(data);
+        outputStream.flush();
+    }
+
     private String getStatusPayload() {
         try {
             if (trapDetector == null) {
@@ -453,7 +744,7 @@ public class WebServer {
         try {
             String saved = preferences.getString(
                     "detector_thresholds",
-                    "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18}"
+                    "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18,\"minClosingFrames\":5,\"minClosingDurationMs\":800}"
             );
             return new JSONObject(saved);
         } catch (Exception e) {
@@ -470,7 +761,7 @@ public class WebServer {
             return trapDetector.getThresholdSettingsJson().toString();
         } catch (Exception e) {
             Log.e(TAG, "Failed to build threshold payload", e);
-            return "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18}";
+            return "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18,\"minClosingFrames\":5,\"minClosingDurationMs\":800}";
         }
     }
 

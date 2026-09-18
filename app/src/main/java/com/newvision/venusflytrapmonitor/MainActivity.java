@@ -24,6 +24,10 @@ import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.video.Quality;
+import androidx.camera.video.QualitySelector;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.VideoCapture;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 
@@ -68,6 +72,12 @@ public class MainActivity extends AppCompatActivity {
     private ProcessCameraProvider cameraProvider;
 
     private Camera camera;
+
+    private Recorder videoRecorder;
+
+    private VideoCapture<Recorder> videoCapture;
+
+    private EventRecorder eventRecorder;
 
     private boolean previewBound = false;
 
@@ -142,12 +152,15 @@ public class MainActivity extends AppCompatActivity {
         analysisExecutor =
                 Executors.newSingleThreadExecutor();
 
+        eventRecorder = new EventRecorder(this);
+
         webServer =
                 new WebServer(this);
 
         webServer.setZoomChangeListener(this::applyZoomRatio);
         webServer.setTrapConfigChangeListener(this::reloadTrapConfiguration);
         webServer.setBatteryLevelPercent(getBatteryPercentage());
+        webServer.setEventRecorder(eventRecorder);
         webServer.start();
         batteryHandler.post(batteryRefreshRunnable);
 
@@ -175,6 +188,12 @@ public class MainActivity extends AppCompatActivity {
 
         trapDetector = new TrapDetector(traps);
         webServer.setTrapDetector(trapDetector);
+
+        trapDetector.setStateListener((trapId, oldState, newState) -> {
+            if (eventRecorder != null) {
+                eventRecorder.onTrapStateChanged(trapId, oldState, newState);
+            }
+        });
 
         applyUnattendedDisplayState();
 
@@ -410,6 +429,10 @@ public class MainActivity extends AppCompatActivity {
 
         if (wantPreview) {
 
+            if (eventRecorder != null) {
+                eventRecorder.stop();
+            }
+
             Preview preview =
                     new Preview.Builder()
                             .setTargetRotation(
@@ -433,14 +456,32 @@ public class MainActivity extends AppCompatActivity {
         } else {
 
             // No Preview use case at all - the on-screen PreviewView isn't
-            // needed once ROIs are locked, and this also drops the
-            // display-compositing work that binding it would otherwise
-            // require, regardless of the blackout overlay's visibility.
+            // needed once ROIs are locked (see applyUnattendedDisplayState).
+            // VideoCapture is bound instead, so the rolling pre-event
+            // segment buffer (EventRecorder) can run. Note this reintroduces
+            // a continuous CPU/battery cost - encoding video the whole time
+            // monitoring is active - since a pre-event buffer requires
+            // always recording something. This works against the earlier
+            // battery fix; worth watching drain rate again after this
+            // change.
+            if (videoRecorder == null) {
+                QualitySelector qualitySelector = QualitySelector.from(Quality.SD);
+                videoRecorder = new Recorder.Builder()
+                        .setQualitySelector(qualitySelector)
+                        .build();
+                videoCapture = VideoCapture.withOutput(videoRecorder);
+            }
+
             camera = cameraProvider.bindToLifecycle(
                     this,
                     cameraSelector,
-                    imageAnalysis
+                    imageAnalysis,
+                    videoCapture
             );
+
+            if (eventRecorder != null) {
+                eventRecorder.start(videoRecorder);
+            }
         }
 
         previewBound = wantPreview;
@@ -541,6 +582,10 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
 
         batteryHandler.removeCallbacks(batteryRefreshRunnable);
+
+        if (eventRecorder != null) {
+            eventRecorder.stop();
+        }
 
         if (analysisExecutor != null) {
             analysisExecutor.shutdown();
