@@ -17,27 +17,6 @@
 local.properties
 
 
-===== FILE: all_files.txt =====
-
-===== FILE: .gitignore =====
-
-*.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-
-
 ===== FILE: app\.gitignore =====
 
 /build
@@ -91,2764 +70,7 @@ dependencies {
     implementation "androidx.camera:camera-camera2:$camerax_version"
     implementation "androidx.camera:camera-lifecycle:$camerax_version"
     implementation "androidx.camera:camera-view:$camerax_version"
-
-    testImplementation libs.junit
-    androidTestImplementation libs.ext.junit
-    androidTestImplementation libs.espresso.core
-
-
-}
-
-===== FILE: app\proguard-rules.pro =====
-
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
-
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
-
-===== FILE: app\src\androidTest\java\com\newvision\venusflytrapmonitor\ExampleInstrumentedTest.java =====
-
-package com.newvision.venusflytrapmonitor;
-
-import android.content.Context;
-
-import androidx.test.platform.app.InstrumentationRegistry;
-import androidx.test.ext.junit.runners.AndroidJUnit4;
-
-import org.junit.Test;
-import org.junit.runner.RunWith;
-
-import static org.junit.Assert.*;
-
-/**
- * Instrumented test, which will execute on an Android device.
- *
- * @see <a href="http://d.android.com/tools/testing">Testing documentation</a>
- */
-@RunWith(AndroidJUnit4.class)
-public class ExampleInstrumentedTest {
-    @Test
-    public void useAppContext() {
-        // Context of the app under test.
-        Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        assertEquals("com.newvision.venusflytrapmonitor", appContext.getPackageName());
-    }
-}
-
-===== FILE: app\src\main\AndroidManifest.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-    <!-- use camera is a must -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CAMERA" />
-
-    <application
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.VenusFlytrapMonitor">
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:screenOrientation="landscape"
-            android:theme="@style/Theme.VenusFlytrapMonitor" >
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-
-</manifest>
-
-===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\MainActivity.java =====
-
-package com.newvision.venusflytrapmonitor;
-
-import android.graphics.Matrix;
-import android.Manifest;
-import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
-import android.os.BatteryManager;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.util.Log;
-import android.view.MotionEvent;
-import android.view.WindowManager;
-
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.camera.core.Camera;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.ImageProxy;
-import androidx.camera.core.Preview;
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.camera.view.PreviewView;
-import androidx.core.content.ContextCompat;
-
-import com.google.common.util.concurrent.ListenableFuture;
-
-import org.json.JSONArray;
-
-import java.io.ByteArrayOutputStream;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-import android.graphics.Bitmap;
-
-public class MainActivity extends AppCompatActivity {
-
-    private static final String TAG = "VenusMonitor";
-
-    private PreviewView previewView;
-
-    private ExecutorService analysisExecutor;
-
-    private WebServer webServer;
-
-    private TrapDetector trapDetector;
-
-    private Camera camera;
-
-    private float currentZoomRatio = 1.0f;
-
-    private float pinchStartDistance = 0.0f;
-
-    private byte[] latestJpeg;
-
-    private final Handler batteryHandler = new Handler(Looper.getMainLooper());
-    private final Runnable batteryRefreshRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (webServer != null) {
-                webServer.setBatteryLevelPercent(getBatteryPercentage());
-            }
-            batteryHandler.postDelayed(this, 15000L);
-        }
-    };
-
-    private final ActivityResultLauncher<String> cameraPermissionLauncher =
-            registerForActivityResult(
-                    new ActivityResultContracts.RequestPermission(),
-                    granted -> {
-
-                        if (granted) {
-                            startCamera();
-                        } else {
-                            Log.e(
-                                    TAG,
-                                    "Camera permission denied"
-                            );
-                        }
-                    }
-            );
-
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-
-        super.onCreate(savedInstanceState);
-
-        getWindow().addFlags(
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        );
-
-        setContentView(R.layout.activity_main);
-
-        previewView =
-                findViewById(R.id.previewView);
-
-        previewView.setOnTouchListener(this::handlePreviewTouch);
-
-        analysisExecutor =
-                Executors.newSingleThreadExecutor();
-
-        webServer =
-                new WebServer(this);
-
-        webServer.setZoomChangeListener(this::applyZoomRatio);
-        webServer.setTrapConfigChangeListener(this::reloadTrapConfiguration);
-        webServer.setBatteryLevelPercent(getBatteryPercentage());
-        webServer.start();
-        batteryHandler.post(batteryRefreshRunnable);
-
-        loadTrapConfiguration();
-
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED) {
-
-            startCamera();
-
-        } else {
-
-            cameraPermissionLauncher.launch(
-                    Manifest.permission.CAMERA
-            );
-        }
-    }
-
-    private void reloadTrapConfiguration(JSONArray traps) {
-        if (traps == null) {
-            traps = new JSONArray();
-        }
-
-        trapDetector = new TrapDetector(traps);
-        webServer.setTrapDetector(trapDetector);
-
-        Log.d(
-                TAG,
-                "Reloaded trap configuration: " +
-                        traps.length() +
-                        " ROI(s)"
-        );
-    }
-
-    private void loadTrapConfiguration() {
-
-        SharedPreferences preferences =
-                getSharedPreferences(
-                        "venus_monitor",
-                        MODE_PRIVATE
-                );
-
-        currentZoomRatio =
-                preferences.getFloat(
-                        "zoom",
-                        1.0f
-                );
-
-        String trapsJson =
-                preferences.getString(
-                        "traps",
-                        "[]"
-                );
-
-        try {
-            JSONArray traps =
-                    new JSONArray(trapsJson);
-            reloadTrapConfiguration(traps);
-
-            Log.d(
-                    TAG,
-                    "Loaded " +
-                            traps.length() +
-                            " ROI(s), zoom=" +
-                            currentZoomRatio
-            );
-
-        } catch (Exception e) {
-            Log.e(
-                    TAG,
-                    "Failed to load trap configuration",
-                    e
-            );
-
-            reloadTrapConfiguration(new JSONArray());
-        }
-    }
-
-    private int getBatteryPercentage() {
-        try {
-            BatteryManager batteryManager =
-                    (BatteryManager) getSystemService(BatteryManager.class);
-
-            if (batteryManager != null) {
-                return batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to read battery percentage", e);
-        }
-
-        return 0;
-    }
-
-    private boolean handlePreviewTouch(
-            android.view.View view,
-            MotionEvent event
-    ) {
-
-        if (trapDetector == null ||
-                trapDetector.hasConfiguredRois()) {
-            return false;
-        }
-
-        if (event.getPointerCount() != 2) {
-            return false;
-        }
-
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_POINTER_DOWN:
-                pinchStartDistance = getPointerDistance(event);
-                break;
-
-            case MotionEvent.ACTION_MOVE:
-                float currentDistance = getPointerDistance(event);
-
-                if (pinchStartDistance > 0f && currentDistance > 0f) {
-                    float scale = currentDistance / pinchStartDistance;
-                    applyZoomRatio(currentZoomRatio * scale);
-                    pinchStartDistance = currentDistance;
-                    return true;
-                }
-                break;
-
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                pinchStartDistance = 0f;
-                break;
-
-            default:
-                break;
-        }
-
-        return false;
-    }
-
-    private float getPointerDistance(MotionEvent event) {
-
-        float dx = event.getX(0) - event.getX(1);
-        float dy = event.getY(0) - event.getY(1);
-
-        return (float) Math.hypot(dx, dy);
-    }
-
-    private void applyZoomRatio(float zoomRatio) {
-
-        if (camera == null) {
-            return;
-        }
-
-        currentZoomRatio = Math.max(1.0f, Math.min(3.0f, zoomRatio));
-        camera.getCameraControl().setZoomRatio(currentZoomRatio);
-    }
-
-    private void startCamera() {
-
-        ListenableFuture<ProcessCameraProvider>
-                cameraProviderFuture =
-                ProcessCameraProvider.getInstance(
-                        this
-                );
-
-        cameraProviderFuture.addListener(
-                () -> {
-
-                    try {
-
-                        ProcessCameraProvider
-                                cameraProvider =
-                                cameraProviderFuture.get();
-
-                        bindCamera(
-                                cameraProvider
-                        );
-
-                    } catch (Exception e) {
-
-                        Log.e(
-                                TAG,
-                                "Failed to start camera",
-                                e
-                        );
-                    }
-
-                },
-                ContextCompat.getMainExecutor(this)
-        );
-    }
-
-    private void bindCamera(
-            ProcessCameraProvider cameraProvider
-    ) {
-
-        Preview preview =
-                new Preview.Builder()
-                        .setTargetRotation(
-                                getWindowManager()
-                                        .getDefaultDisplay()
-                                        .getRotation()
-                        )
-                        .build();
-
-        preview.setSurfaceProvider(
-                previewView.getSurfaceProvider()
-        );
-
-        ImageAnalysis imageAnalysis =
-                new ImageAnalysis.Builder()
-                        .setTargetRotation(
-                                getWindowManager()
-                                        .getDefaultDisplay()
-                                        .getRotation()
-                        )
-                        .setBackpressureStrategy(
-                                ImageAnalysis
-                                        .STRATEGY_KEEP_ONLY_LATEST
-                        )
-                        .build();
-
-
-
-        imageAnalysis.setAnalyzer(
-                analysisExecutor,
-                this::analyzeFrame
-        );
-
-        CameraSelector cameraSelector =
-                CameraSelector.DEFAULT_BACK_CAMERA;
-
-        cameraProvider.unbindAll();
-
-        camera = cameraProvider.bindToLifecycle(
-                this,
-                cameraSelector,
-                preview,
-                imageAnalysis
-        );
-
-        applyZoomRatio(currentZoomRatio);
-    }
-
-    private Bitmap rotateBitmap(
-            Bitmap bitmap,
-            int rotationDegrees
-    ) {
-
-        if (rotationDegrees == 0) {
-            return bitmap;
-        }
-
-        Matrix matrix = new Matrix();
-
-        matrix.postRotate(rotationDegrees);
-
-        return Bitmap.createBitmap(
-                bitmap,
-                0,
-                0,
-                bitmap.getWidth(),
-                bitmap.getHeight(),
-                matrix,
-                true
-        );
-    }
-
-    private void analyzeFrame(
-            ImageProxy imageProxy
-    ) {
-
-        Bitmap bitmap = null;
-
-        try {
-
-            bitmap =
-                    imageProxy.toBitmap();
-
-            if (trapDetector != null) {
-
-                trapDetector.analyzeFrame(
-                        bitmap
-                );
-            }
-
-            ByteArrayOutputStream outputStream =
-                    new ByteArrayOutputStream();
-
-            bitmap.compress(
-                    Bitmap.CompressFormat.JPEG,
-                    80,
-                    outputStream
-            );
-
-            latestJpeg =
-                    outputStream.toByteArray();
-
-            webServer.setLatestJpeg(
-                    latestJpeg
-            );
-
-        } catch (Exception e) {
-
-            Log.e(
-                    TAG,
-                    "Failed to analyze frame",
-                    e
-            );
-
-        } finally {
-
-            if (bitmap != null) {
-                bitmap.recycle();
-            }
-
-            imageProxy.close();
-        }
-    }
-
-    @Override
-    protected void onDestroy() {
-
-        super.onDestroy();
-
-        batteryHandler.removeCallbacks(batteryRefreshRunnable);
-
-        if (analysisExecutor != null) {
-            analysisExecutor.shutdown();
-        }
-
-        if (webServer != null) {
-            webServer.stop();
-        }
-    }
-}
-
-===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\TrapDetector.java =====
-
-package com.newvision.venusflytrapmonitor;
-
-import android.graphics.Bitmap;
-import android.util.Log;
-
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-public class TrapDetector {
-
-    private static final String TAG = "TrapDetector";
-
-    private static final long CALIBRATION_TIME_MS = 15000;
-    private static final long LOG_INTERVAL_MS = 2000;
-
-    // Each ROI is resampled into a GRID_SIZE x GRID_SIZE grid of average
-    // brightness cells instead of a single overall brightness number. This
-    // gives a coarse spatial signature of the ROI, so a shape change (a trap
-    // closing) can start to be distinguished from a uniform lighting change,
-    // which affects all cells roughly equally.
-    private static final int GRID_SIZE = 12;
-    private static final int GRID_CELLS = GRID_SIZE * GRID_SIZE;
-
-    // How fast the baseline drifts toward the current frame when no event is
-    // suspected. Small on purpose so brief flickers don't move the baseline.
-    private static final float BASELINE_ADAPT_ALPHA = 0.02f;
-
-    public static class Thresholds {
-        public float baselineAdaptMeanDiffThreshold = 8.0f;
-        public float cellChangeThreshold = 15.0f;
-        public float closedMeanDiffThreshold = 18.0f;
-        public float closedChangedFractionThreshold = 0.18f;
-
-        public JSONObject toJson() {
-            try {
-                JSONObject json = new JSONObject();
-                json.put("baselineAdaptMeanDiffThreshold", baselineAdaptMeanDiffThreshold);
-                json.put("cellChangeThreshold", cellChangeThreshold);
-                json.put("closedMeanDiffThreshold", closedMeanDiffThreshold);
-                json.put("closedChangedFractionThreshold", closedChangedFractionThreshold);
-                return json;
-            } catch (JSONException e) {
-                return new JSONObject();
-            }
-        }
-
-        public static Thresholds fromJson(JSONObject json) {
-            if (json == null) {
-                return null;
-            }
-
-            Thresholds thresholds = new Thresholds();
-
-            try {
-                if (json.has("baselineAdaptMeanDiffThreshold")) {
-                    thresholds.baselineAdaptMeanDiffThreshold = (float) json.getDouble("baselineAdaptMeanDiffThreshold");
-                }
-
-                if (json.has("cellChangeThreshold")) {
-                    thresholds.cellChangeThreshold = (float) json.getDouble("cellChangeThreshold");
-                }
-
-                if (json.has("closedMeanDiffThreshold")) {
-                    thresholds.closedMeanDiffThreshold = (float) json.getDouble("closedMeanDiffThreshold");
-                }
-
-                if (json.has("closedChangedFractionThreshold")) {
-                    thresholds.closedChangedFractionThreshold = (float) json.getDouble("closedChangedFractionThreshold");
-                }
-            } catch (JSONException e) {
-                return thresholds;
-            }
-
-            return thresholds;
-        }
-    }
-
-    private final JSONArray traps;
-
-    // baselineGrids[roiIndex][cellIndex], brightness 0-255 per cell.
-    private final float[][] baselineGrids;
-    private final int[] calibrationSampleCount;
-    private final boolean[] closedStates;
-    private final float[] lastMeanDiffs;
-    private final float[] lastChangedFractions;
-
-    private long calibrationStartTime = 0;
-    private boolean calibrated = false;
-    private long lastLogTime = 0;
-    private Thresholds thresholds = new Thresholds();
-
-    public TrapDetector(JSONArray traps) {
-
-        this.traps = traps;
-
-        int trapCount = traps.length();
-
-        baselineGrids = new float[trapCount][GRID_CELLS];
-        calibrationSampleCount = new int[trapCount];
-        closedStates = new boolean[trapCount];
-        lastMeanDiffs = new float[trapCount];
-        lastChangedFractions = new float[trapCount];
-    }
-
-    public boolean hasConfiguredRois() {
-        return traps != null && traps.length() > 0;
-    }
-
-    public boolean isCalibrated() {
-        return calibrated;
-    }
-
-    public void setThresholds(Thresholds newThresholds) {
-        if (newThresholds != null) {
-            thresholds = newThresholds;
-        }
-    }
-
-    public void setThresholds(JSONObject config) {
-        Thresholds parsed = Thresholds.fromJson(config);
-        if (parsed != null) {
-            thresholds = parsed;
-        }
-    }
-
-    public Thresholds getThresholds() {
-        return thresholds;
-    }
-
-    public JSONObject getThresholdSettingsJson() {
-        return thresholds.toJson();
-    }
-
-    public JSONArray getStatusJson() {
-        JSONArray items = new JSONArray();
-
-        for (int i = 0; i < traps.length(); i++) {
-            JSONObject trap = traps.optJSONObject(i);
-            if (trap == null) {
-                continue;
-            }
-
-            try {
-                JSONObject item = new JSONObject();
-                item.put("id", trap.optInt("id", i + 1));
-                item.put("closed", closedStates[i]);
-                item.put("meanDiff", lastMeanDiffs[i]);
-                item.put("changedFraction", lastChangedFractions[i]);
-                item.put("calibrated", calibrated);
-                items.put(item);
-            } catch (JSONException e) {
-                Log.w(TAG, "Failed to encode trap status for ROI " + i, e);
-            }
-        }
-
-        return items;
-    }
-
-    public boolean isTrapClosed(int trapId) {
-        for (int i = 0; i < traps.length(); i++) {
-            JSONObject trap = traps.optJSONObject(i);
-            if (trap != null && trap.optInt("id", i + 1) == trapId) {
-                return closedStates[i];
-            }
-        }
-        return false;
-    }
-
-    public void analyzeFrame(Bitmap bitmap) {
-
-        try {
-
-            if (calibrationStartTime == 0) {
-                calibrationStartTime = System.currentTimeMillis();
-            }
-
-            long now = System.currentTimeMillis();
-
-            boolean shouldLog = calibrated && (now - lastLogTime >= LOG_INTERVAL_MS);
-
-            for (int i = 0; i < traps.length(); i++) {
-
-                JSONObject trap = traps.getJSONObject(i);
-
-                int[] bounds = roiPixelBounds(trap, bitmap);
-
-                float[] currentGrid = computeGrid(
-                        bitmap,
-                        bounds[0],
-                        bounds[1],
-                        bounds[2],
-                        bounds[3]
-                );
-
-                if (!calibrated) {
-
-                    for (int c = 0; c < GRID_CELLS; c++) {
-                        baselineGrids[i][c] += currentGrid[c];
-                    }
-
-                    calibrationSampleCount[i]++;
-
-                } else {
-
-                    float meanDiff = 0f;
-                    int changedCells = 0;
-
-                    for (int c = 0; c < GRID_CELLS; c++) {
-
-                        float cellDiff = Math.abs(currentGrid[c] - baselineGrids[i][c]);
-                        meanDiff += cellDiff;
-
-                        if (cellDiff > thresholds.cellChangeThreshold) {
-                            changedCells++;
-                        }
-                    }
-
-                    meanDiff /= GRID_CELLS;
-                    float changedFraction = (float) changedCells / GRID_CELLS;
-                    lastMeanDiffs[i] = meanDiff;
-                    lastChangedFractions[i] = changedFraction;
-
-                    boolean trapClosed = meanDiff >= thresholds.closedMeanDiffThreshold
-                            && changedFraction >= thresholds.closedChangedFractionThreshold;
-                    closedStates[i] = trapClosed;
-
-                    if (meanDiff < thresholds.baselineAdaptMeanDiffThreshold) {
-
-                        for (int c = 0; c < GRID_CELLS; c++) {
-                            baselineGrids[i][c] =
-                                    baselineGrids[i][c] * (1f - BASELINE_ADAPT_ALPHA)
-                                            + currentGrid[c] * BASELINE_ADAPT_ALPHA;
-                        }
-                    }
-
-                    if (shouldLog) {
-                        Log.d(TAG, "ROI " + trap.getInt("id")
-                                + ": meanDiff=" + meanDiff
-                                + ", changedFraction=" + changedFraction
-                                + ", closed=" + trapClosed);
-                    }
-                }
-            }
-
-            if (!calibrated && now - calibrationStartTime >= CALIBRATION_TIME_MS) {
-
-                for (int i = 0; i < traps.length(); i++) {
-
-                    if (calibrationSampleCount[i] > 0) {
-
-                        for (int c = 0; c < GRID_CELLS; c++) {
-                            baselineGrids[i][c] /= calibrationSampleCount[i];
-                        }
-                    }
-
-                    Log.d(TAG, "ROI " + traps.getJSONObject(i).getInt("id")
-                            + ": baseline grid captured ("
-                            + calibrationSampleCount[i] + " samples)");
-                }
-
-                calibrated = true;
-                Log.d(TAG, "Calibration complete");
-            }
-
-            if (shouldLog) {
-                lastLogTime = now;
-            }
-
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to analyze ROI", e);
-        }
-    }
-
-    private int[] roiPixelBounds(JSONObject trap, Bitmap bitmap) throws Exception {
-
-        float left = (float) trap.getDouble("left");
-        float top = (float) trap.getDouble("top");
-        float roiWidth = (float) trap.getDouble("width");
-        float roiHeight = (float) trap.getDouble("height");
-
-        int x = Math.round(left * bitmap.getWidth());
-        int y = Math.round(top * bitmap.getHeight());
-        int width = Math.round(roiWidth * bitmap.getWidth());
-        int height = Math.round(roiHeight * bitmap.getHeight());
-
-        return new int[]{x, y, width, height};
-    }
-
-    // Resamples the ROI into a GRID_SIZE x GRID_SIZE grid of average
-    // grayscale brightness values (0-255), giving a coarse spatial signature
-    // instead of a single overall brightness number.
-    private float[] computeGrid(Bitmap bitmap, int x, int y, int width, int height) {
-
-        float[] grid = new float[GRID_CELLS];
-
-        int right = Math.min(x + width, bitmap.getWidth());
-        int bottom = Math.min(y + height, bitmap.getHeight());
-        int left = Math.max(0, x);
-        int top = Math.max(0, y);
-
-        if (left >= right || top >= bottom) {
-            return grid;
-        }
-
-        float cellWidth = (right - left) / (float) GRID_SIZE;
-        float cellHeight = (bottom - top) / (float) GRID_SIZE;
-
-        for (int row = 0; row < GRID_SIZE; row++) {
-
-            for (int col = 0; col < GRID_SIZE; col++) {
-
-                int cellLeft = left + Math.round(col * cellWidth);
-                int cellRight = left + Math.round((col + 1) * cellWidth);
-                int cellTop = top + Math.round(row * cellHeight);
-                int cellBottom = top + Math.round((row + 1) * cellHeight);
-
-                grid[row * GRID_SIZE + col] =
-                        averageBrightness(bitmap, cellLeft, cellTop, cellRight, cellBottom);
-            }
-        }
-
-        return grid;
-    }
-
-    private float averageBrightness(Bitmap bitmap, int left, int top, int right, int bottom) {
-
-        right = Math.min(right, bitmap.getWidth());
-        bottom = Math.min(bottom, bitmap.getHeight());
-        left = Math.max(0, left);
-        top = Math.max(0, top);
-
-        if (left >= right || top >= bottom) {
-            return 0;
-        }
-
-        long total = 0;
-        long samples = 0;
-
-        int step = Math.max(1, Math.min(right - left, bottom - top) / 6);
-
-        for (int py = top; py < bottom; py += step) {
-
-            for (int px = left; px < right; px += step) {
-
-                int pixel = bitmap.getPixel(px, py);
-
-                int red = (pixel >> 16) & 0xFF;
-                int green = (pixel >> 8) & 0xFF;
-                int blue = pixel & 0xFF;
-
-                total += (red + green + blue) / 3;
-                samples++;
-            }
-        }
-
-        if (samples == 0) {
-            return 0;
-        }
-
-        return (float) total / samples;
-    }
-}
-
-===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\WebServer.java =====
-
-package com.newvision.venusflytrapmonitor;
-
-import android.content.Context;
-import android.content.SharedPreferences;
-import android.util.Log;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.function.Consumer;
-
-public class WebServer {
-
-    private static final String TAG = "VenusWebServer";
-    private static final float MIN_ZOOM = 1.0f;
-    private static final float MAX_ZOOM = 3.0f;
-
-    private final Context context;
-    private final SharedPreferences preferences;
-
-    private ServerSocket serverSocket;
-    private Thread serverThread;
-
-    private volatile byte[] latestJpeg;
-    private volatile Consumer<Float> zoomChangeListener;
-    private volatile Consumer<JSONArray> trapConfigChangeListener;
-    private volatile TrapDetector trapDetector;
-    private volatile int batteryLevelPercent = 0;
-
-    public WebServer(Context context) {
-        this.context = context.getApplicationContext();
-
-        preferences =
-                this.context.getSharedPreferences(
-                        "venus_monitor",
-                        Context.MODE_PRIVATE
-                );
-    }
-
-    public void setLatestJpeg(byte[] jpeg) {
-        latestJpeg = jpeg;
-    }
-
-    public void setZoomChangeListener(Consumer<Float> listener) {
-        zoomChangeListener = listener;
-    }
-
-    public void setTrapConfigChangeListener(Consumer<JSONArray> listener) {
-        trapConfigChangeListener = listener;
-    }
-
-    public void setBatteryLevelPercent(int percent) {
-        batteryLevelPercent = Math.max(0, Math.min(100, percent));
-    }
-
-    public void setTrapDetector(TrapDetector detector) {
-        trapDetector = detector;
-
-        if (detector != null) {
-            try {
-                String savedThresholds =
-                        preferences.getString(
-                                "detector_thresholds",
-                                detector.getThresholdSettingsJson().toString()
-                        );
-                detector.setThresholds(new JSONObject(savedThresholds));
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to restore saved detector thresholds", e);
-            }
-        }
-    }
-
-    public void start() {
-
-        serverThread = new Thread(() -> {
-
-            try {
-
-                serverSocket = new ServerSocket(8080);
-
-                Log.d(
-                        TAG,
-                        "Server started on port 8080"
-                );
-
-                while (!serverSocket.isClosed()) {
-
-                    Socket socket =
-                            serverSocket.accept();
-
-                    Log.d(
-                            TAG,
-                            "Client connected: "
-                                    + socket.getInetAddress()
-                    );
-
-                    handleRequest(socket);
-
-                    socket.close();
-                }
-
-            } catch (IOException e) {
-
-                Log.e(
-                        TAG,
-                        "Server error",
-                        e
-                );
-            }
-
-        });
-
-        serverThread.start();
-    }
-
-    private void handleRequest(Socket socket) {
-
-        try {
-
-            BufferedReader reader =
-                    new BufferedReader(
-                            new InputStreamReader(
-                                    socket.getInputStream()
-                            )
-                    );
-
-            String requestLine =
-                    reader.readLine();
-
-            Log.d(
-                    TAG,
-                    "Request: " + requestLine
-            );
-
-            if (requestLine == null) {
-                return;
-            }
-
-            int contentLength = 0;
-
-            String line;
-
-            while ((line = reader.readLine()) != null &&
-                    !line.isEmpty()) {
-
-                if (line.toLowerCase()
-                        .startsWith("content-length:")) {
-
-                    String value =
-                            line.substring(
-                                    "content-length:".length()
-                            ).trim();
-
-                    contentLength =
-                            Integer.parseInt(value);
-                }
-            }
-
-            if (requestLine.startsWith("GET /preview")) {
-
-                sendPreview(socket);
-
-            } else if (
-                    requestLine.startsWith("GET /traps")
-            ) {
-
-                String traps =
-                        preferences.getString(
-                                "traps",
-                                "[]"
-                        );
-
-                sendJson(socket, traps);
-
-            } else if (
-                    requestLine.startsWith("GET /status")
-            ) {
-
-                sendJson(socket, getStatusPayload());
-
-            } else if (
-                    requestLine.startsWith("GET /thresholds")
-            ) {
-
-                sendJson(socket, getThresholdsPayload());
-
-            } else if (
-                    requestLine.startsWith("GET /battery")
-            ) {
-
-                sendJson(socket, getBatteryPayload());
-
-            } else if (
-                    requestLine.startsWith("POST /traps")
-            ) {
-
-                String body =
-                        readRequestBody(
-                                reader,
-                                contentLength
-                        );
-
-                JSONArray sanitizedTraps = sanitizeTrapList(body);
-
-                preferences
-                        .edit()
-                        .putString("traps", sanitizedTraps.toString())
-                        .apply();
-
-                try {
-                    if (trapDetector != null) {
-                        trapDetector = new TrapDetector(sanitizedTraps);
-                        trapDetector.setThresholds(getSavedThresholds());
-                    }
-
-                    if (trapConfigChangeListener != null) {
-                        trapConfigChangeListener.accept(sanitizedTraps);
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to reload detector after trap save", e);
-                }
-
-                Log.d(
-                        TAG,
-                        "Traps saved: " + sanitizedTraps.toString()
-                );
-
-                sendText(
-                        socket,
-                        "Traps saved"
-                );
-
-            } else if (
-                    requestLine.startsWith("POST /zoom")
-            ) {
-
-                handleZoomRequest(
-                        socket,
-                        reader,
-                        contentLength
-                );
-
-            } else if (
-                    requestLine.startsWith("POST /thresholds")
-            ) {
-
-                handleThresholdSettingsRequest(
-                        socket,
-                        reader,
-                        contentLength
-                );
-
-            } else {
-
-                sendHtml(socket);
-            }
-        } catch (Exception e) {
-
-            Log.e(
-                    TAG,
-                    "Failed to handle request",
-                    e
-            );
-        }
-    }
-
-    private String readRequestBody(
-            BufferedReader reader,
-            int contentLength
-    ) throws IOException {
-
-        char[] buffer =
-                new char[contentLength];
-
-        int totalRead = 0;
-
-        while (totalRead < contentLength) {
-
-            int count =
-                    reader.read(
-                            buffer,
-                            totalRead,
-                            contentLength - totalRead
-                    );
-
-            if (count == -1) {
-                break;
-            }
-
-            totalRead += count;
-        }
-
-        return new String(
-                buffer,
-                0,
-                totalRead
-        );
-    }
-
-    private void handleZoomRequest(
-            Socket socket,
-            BufferedReader reader,
-            int contentLength
-    ) throws IOException {
-
-        try {
-            String body = readRequestBody(reader, contentLength);
-            JSONObject payload = new JSONObject(body);
-
-            if (!payload.has("zoom")) {
-                sendText(socket, "Missing zoom value", 400);
-                return;
-            }
-
-            float requestedZoom = (float) payload.getDouble("zoom");
-
-            String traps = preferences.getString("traps", "[]");
-            JSONArray configuredTraps = new JSONArray();
-
-            try {
-                configuredTraps = new JSONArray(traps);
-            } catch (Exception ignored) {
-                Log.w(TAG, "Stored ROI list is invalid; treating as empty");
-            }
-
-            if (configuredTraps.length() > 0) {
-                sendText(socket, "Zoom disabled while ROI exists", 400);
-                return;
-            }
-
-            float clampedZoom =
-                    Math.max(
-                            MIN_ZOOM,
-                            Math.min(MAX_ZOOM, requestedZoom)
-                    );
-
-            preferences
-                    .edit()
-                    .putFloat("zoom", clampedZoom)
-                    .apply();
-
-            if (zoomChangeListener != null) {
-                zoomChangeListener.accept(clampedZoom);
-            }
-
-            sendText(socket, "Zoom set to " + clampedZoom, 200);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to process zoom request", e);
-            sendText(socket, "Invalid zoom payload", 400);
-        }
-    }
-
-    private void handleThresholdSettingsRequest(
-            Socket socket,
-            BufferedReader reader,
-            int contentLength
-    ) throws IOException {
-
-        try {
-            String body = readRequestBody(reader, contentLength);
-            JSONObject payload = new JSONObject(body);
-
-            if (trapDetector != null) {
-                trapDetector.setThresholds(payload);
-            }
-
-            preferences
-                    .edit()
-                    .putString("detector_thresholds", payload.toString())
-                    .apply();
-
-            sendText(socket, "Thresholds saved");
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to process threshold request", e);
-            sendText(socket, "Invalid threshold payload", 400);
-        }
-    }
-
-    private String getStatusPayload() {
-        try {
-            if (trapDetector == null) {
-                JSONObject payload = new JSONObject();
-                payload.put("calibrated", false);
-                payload.put("traps", new JSONArray());
-                return payload.toString();
-            }
-
-            JSONObject payload = new JSONObject();
-            payload.put("calibrated", trapDetector.isCalibrated());
-            payload.put("traps", trapDetector.getStatusJson());
-            return payload.toString();
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to build status payload", e);
-            try {
-                JSONObject payload = new JSONObject();
-                payload.put("calibrated", false);
-                payload.put("traps", new JSONArray());
-                return payload.toString();
-            } catch (Exception fallbackError) {
-                Log.e(TAG, "Failed to build fallback status payload", fallbackError);
-                return "{\"calibrated\":false,\"traps\":[]}";
-            }
-        }
-    }
-
-    private JSONArray sanitizeTrapList(String body) {
-        JSONArray parsed = new JSONArray();
-
-        try {
-            JSONArray source = new JSONArray(body);
-            HashMap<Integer, JSONObject> uniqueTraps = new HashMap<>();
-
-            for (int i = 0; i < source.length(); i++) {
-                JSONObject trap = source.optJSONObject(i);
-                if (trap == null) {
-                    continue;
-                }
-
-                int trapId = trap.optInt("id", i + 1);
-                if (trapId < 1) {
-                    trapId = i + 1;
-                }
-
-                uniqueTraps.put(trapId, trap);
-            }
-
-            for (JSONObject trap : uniqueTraps.values()) {
-                parsed.put(trap);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to sanitize trap list; using original payload", e);
-            try {
-                return new JSONArray(body);
-            } catch (Exception ignored) {
-                return new JSONArray();
-            }
-        }
-
-        return parsed;
-    }
-
-    private JSONObject getSavedThresholds() {
-        try {
-            String saved = preferences.getString(
-                    "detector_thresholds",
-                    "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18}"
-            );
-            return new JSONObject(saved);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to parse saved thresholds, using defaults", e);
-            return new JSONObject();
-        }
-    }
-
-    private String getThresholdsPayload() {
-        try {
-            if (trapDetector == null) {
-                return getSavedThresholds().toString();
-            }
-            return trapDetector.getThresholdSettingsJson().toString();
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to build threshold payload", e);
-            return "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18}";
-        }
-    }
-
-    private String getBatteryPayload() {
-        try {
-            JSONObject payload = new JSONObject();
-            payload.put("level", batteryLevelPercent);
-            return payload.toString();
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to build battery payload", e);
-            return "{\"level\":0}";
-        }
-    }
-
-    private void sendJson(
-            Socket socket,
-            String body
-    ) throws IOException {
-
-        byte[] bodyBytes =
-                body.getBytes(
-                        StandardCharsets.UTF_8
-                );
-
-        String headers =
-                "HTTP/1.1 200 OK\r\n" +
-                        "Content-Type: application/json; charset=UTF-8\r\n" +
-                        "X-Zoom: " +
-                        preferences.getFloat("zoom", 1.0f) +
-                        "\r\n" +
-                        "Content-Length: " +
-                        bodyBytes.length +
-                        "\r\n" +
-                        "Connection: close\r\n" +
-                        "\r\n";
-
-        OutputStream outputStream =
-                socket.getOutputStream();
-
-        outputStream.write(
-                headers.getBytes(
-                        StandardCharsets.UTF_8
-                )
-        );
-
-        outputStream.write(bodyBytes);
-        outputStream.flush();
-    }
-
-    private void sendText(
-            Socket socket,
-            String body
-    ) throws IOException {
-        sendText(socket, body, 200);
-    }
-
-    private void sendText(
-            Socket socket,
-            String body,
-            int statusCode
-    ) throws IOException {
-
-        byte[] bodyBytes =
-                body.getBytes(
-                        StandardCharsets.UTF_8
-                );
-
-        String headers =
-                "HTTP/1.1 " + statusCode + " " +
-                        (statusCode == 200 ? "OK" : "Bad Request") + "\r\n" +
-                        "Content-Type: text/plain; charset=UTF-8\r\n" +
-                        "Content-Length: " +
-                        bodyBytes.length +
-                        "\r\n" +
-                        "Connection: close\r\n" +
-                        "\r\n";
-
-        OutputStream outputStream =
-                socket.getOutputStream();
-
-        outputStream.write(
-                headers.getBytes(
-                        StandardCharsets.UTF_8
-                )
-        );
-
-        outputStream.write(bodyBytes);
-        outputStream.flush();
-    }
-
-    private void sendPreview(Socket socket) {
-
-        try {
-
-            byte[] jpeg = latestJpeg;
-
-            if (jpeg == null) {
-
-                String body =
-                        "Camera image not ready yet";
-
-                byte[] bodyBytes =
-                        body.getBytes(
-                                StandardCharsets.UTF_8
-                        );
-
-                String response =
-                        "HTTP/1.1 503 Service Unavailable\r\n" +
-                                "Content-Type: text/plain; charset=UTF-8\r\n" +
-                                "Content-Length: " +
-                                bodyBytes.length +
-                                "\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n";
-
-                OutputStream outputStream =
-                        socket.getOutputStream();
-
-                outputStream.write(
-                        response.getBytes(
-                                StandardCharsets.UTF_8
-                        )
-                );
-
-                outputStream.write(bodyBytes);
-                outputStream.flush();
-
-                return;
-            }
-
-            OutputStream outputStream =
-                    socket.getOutputStream();
-
-            String headers =
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: image/jpeg\r\n" +
-                            "Content-Length: " +
-                            jpeg.length +
-                            "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n";
-
-            outputStream.write(
-                    headers.getBytes(
-                            StandardCharsets.UTF_8
-                    )
-            );
-
-            outputStream.write(jpeg);
-            outputStream.flush();
-
-        } catch (IOException e) {
-
-            Log.e(
-                    TAG,
-                    "Failed to send preview",
-                    e
-            );
-        }
-    }
-
-    private void sendHtml(Socket socket) {
-
-        try {
-
-            String body = loadHtml();
-
-            byte[] bodyBytes =
-                    body.getBytes(
-                            StandardCharsets.UTF_8
-                    );
-
-            String headers =
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: text/html; charset=UTF-8\r\n" +
-                            "Content-Length: " +
-                            bodyBytes.length +
-                            "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n";
-
-            OutputStream outputStream =
-                    socket.getOutputStream();
-
-            outputStream.write(
-                    headers.getBytes(
-                            StandardCharsets.UTF_8
-                    )
-            );
-
-            outputStream.write(bodyBytes);
-            outputStream.flush();
-
-        } catch (IOException e) {
-
-            Log.e(
-                    TAG,
-                    "Failed to send HTML",
-                    e
-            );
-        }
-    }
-
-    private String loadHtml() throws IOException {
-
-        InputStream inputStream =
-                context.getAssets().open("index.html");
-
-        ByteArrayOutputStream outputStream =
-                new ByteArrayOutputStream();
-
-        byte[] buffer = new byte[4096];
-
-        int bytesRead;
-
-        while ((bytesRead =
-                inputStream.read(buffer)) != -1) {
-
-            outputStream.write(
-                    buffer,
-                    0,
-                    bytesRead
-            );
-        }
-
-        inputStream.close();
-
-        return new String(
-                outputStream.toByteArray(),
-                StandardCharsets.UTF_8
-        );
-    }
-
-    public void stop() {
-
-        try {
-
-            if (serverSocket != null) {
-                serverSocket.close();
-            }
-
-        } catch (IOException e) {
-
-            Log.e(
-                    TAG,
-                    "Error stopping server",
-                    e
-            );
-        }
-    }
-}
-
-===== FILE: app\src\main\res\drawable\ic_launcher_background.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#3DDC84"
-        android:pathData="M0,0h108v108h-108z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M9,0L9,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,0L19,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M29,0L29,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M39,0L39,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M49,0L49,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M59,0L59,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M69,0L69,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M79,0L79,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M89,0L89,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M99,0L99,108"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,9L108,9"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,19L108,19"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,29L108,29"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,39L108,39"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,49L108,49"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,59L108,59"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,69L108,69"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,79L108,79"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,89L108,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M0,99L108,99"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,29L89,29"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,39L89,39"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,49L89,49"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,59L89,59"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,69L89,69"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M19,79L89,79"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M29,19L29,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M39,19L39,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M49,19L49,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M59,19L59,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M69,19L69,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M79,19L79,89"
-        android:strokeWidth="0.8"
-        android:strokeColor="#33FFFFFF" />
-</vector>
-
-
-===== FILE: app\src\main\res\drawable\ic_launcher_foreground.xml =====
-
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:endX="85.84757"
-                android:endY="92.4963"
-                android:startX="42.9492"
-                android:startY="49.59793"
-                android:type="linear">
-                <item
-                    android:color="#44000000"
-                    android:offset="0.0" />
-                <item
-                    android:color="#00000000"
-                    android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-    <path
-        android:fillColor="#FFFFFF"
-        android:fillType="nonZero"
-        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
-        android:strokeWidth="1"
-        android:strokeColor="#00000000" />
-</vector>
-
-===== FILE: app\src\main\res\layout\activity_main.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
-
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-</FrameLayout>
-
-===== FILE: app\src\main\res\layout\activity_main2.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:fitsSystemWindows="true"
-    tools:context=".MainActivity">
-
-    <com.google.android.material.appbar.AppBarLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:fitsSystemWindows="true">
-
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize" />
-
-    </com.google.android.material.appbar.AppBarLayout>
-
-    <include layout="@layout/content_main" />
-
-    <com.google.android.material.floatingactionbutton.FloatingActionButton
-        android:id="@+id/fab"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|end"
-        android:layout_marginEnd="@dimen/fab_margin"
-        android:layout_marginBottom="16dp"
-        app:srcCompat="@android:drawable/ic_dialog_email" />
-
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
-
-===== FILE: app\src\main\res\layout\content_main.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    app:layout_behavior="@string/appbar_scrolling_view_behavior">
-
-    <fragment
-        android:id="@+id/nav_host_fragment_content_main"
-        android:name="androidx.navigation.fragment.NavHostFragment"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        app:defaultNavHost="true"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:navGraph="@navigation/nav_graph" />
-</androidx.constraintlayout.widget.ConstraintLayout>
-
-===== FILE: app\src\main\res\layout\fragment_first.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    tools:context=".FirstFragment">
-
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:padding="16dp">
-
-        <Button
-            android:id="@+id/button_first"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/next"
-            app:layout_constraintBottom_toTopOf="@id/textview_first"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <TextView
-            android:id="@+id/textview_first"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/lorem_ipsum"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/button_first" />
-    </androidx.constraintlayout.widget.ConstraintLayout>
-</androidx.core.widget.NestedScrollView>
-
-===== FILE: app\src\main\res\layout\fragment_second.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    tools:context=".SecondFragment">
-
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:padding="16dp">
-
-        <Button
-            android:id="@+id/button_second"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/previous"
-            app:layout_constraintBottom_toTopOf="@id/textview_second"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
-        <TextView
-            android:id="@+id/textview_second"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/lorem_ipsum"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/button_second" />
-    </androidx.constraintlayout.widget.ConstraintLayout>
-</androidx.core.widget.NestedScrollView>
-
-===== FILE: app\src\main\res\mipmap-anydpi\ic_launcher.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
-</adaptive-icon>
-
-===== FILE: app\src\main\res\mipmap-anydpi\ic_launcher_round.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
-</adaptive-icon>
-
-===== FILE: app\src\main\res\navigation\nav_graph.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<navigation xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/nav_graph"
-    app:startDestination="@id/FirstFragment">
-
-    <fragment
-        android:id="@+id/FirstFragment"
-        android:name="com.newvision.venusflytrapmonitor.FirstFragment"
-        android:label="@string/first_fragment_label"
-        tools:layout="@layout/fragment_first">
-
-        <action
-            android:id="@+id/action_FirstFragment_to_SecondFragment"
-            app:destination="@id/SecondFragment" />
-    </fragment>
-    <fragment
-        android:id="@+id/SecondFragment"
-        android:name="com.newvision.venusflytrapmonitor.SecondFragment"
-        android:label="@string/second_fragment_label"
-        tools:layout="@layout/fragment_second">
-
-        <action
-            android:id="@+id/action_SecondFragment_to_FirstFragment"
-            app:destination="@id/FirstFragment" />
-    </fragment>
-</navigation>
-
-===== FILE: app\src\main\res\values\colors.xml =====
-
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
-</resources>
-
-===== FILE: app\src\main\res\values\dimens.xml =====
-
-<resources>
-    <dimen name="fab_margin">16dp</dimen>
-</resources>
-
-===== FILE: app\src\main\res\values\strings.xml =====
-
-<resources>
-    <string name="app_name">VenusFlytrapMonitor</string>
-    <!-- Strings used for fragments for navigation -->
-    <string name="first_fragment_label">First Fragment</string>
-    <string name="second_fragment_label">Second Fragment</string>
-    <string name="next">Next</string>
-    <string name="previous">Previous</string>
-
-    <string name="lorem_ipsum">
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam in scelerisque sem. Mauris
-        volutpat, dolor id interdum ullamcorper, risus dolor egestas lectus, sit amet mattis purus
-        dui nec risus. Maecenas non sodales nisi, vel dictum dolor. Class aptent taciti sociosqu ad
-        litora torquent per conubia nostra, per inceptos himenaeos. Suspendisse blandit eleifend
-        diam, vel rutrum tellus vulputate quis. Aliquam eget libero aliquet, imperdiet nisl a,
-        ornare ex. Sed rhoncus est ut libero porta lobortis. Fusce in dictum tellus.\n\n
-        Suspendisse interdum ornare ante. Aliquam nec cursus lorem. Morbi id magna felis. Vivamus
-        egestas, est a condimentum egestas, turpis nisl iaculis ipsum, in dictum tellus dolor sed
-        neque. Morbi tellus erat, dapibus ut sem a, iaculis tincidunt dui. Interdum et malesuada
-        fames ac ante ipsum primis in faucibus. Curabitur et eros porttitor, ultricies urna vitae,
-        molestie nibh. Phasellus at commodo eros, non aliquet metus. Sed maximus nisl nec dolor
-        bibendum, vel congue leo egestas.\n\n
-        Sed interdum tortor nibh, in sagittis risus mollis quis. Curabitur mi odio, condimentum sit
-        amet auctor at, mollis non turpis. Nullam pretium libero vestibulum, finibus orci vel,
-        molestie quam. Fusce blandit tincidunt nulla, quis sollicitudin libero facilisis et. Integer
-        interdum nunc ligula, et fermentum metus hendrerit id. Vestibulum lectus felis, dictum at
-        lacinia sit amet, tristique id quam. Cras eu consequat dui. Suspendisse sodales nunc ligula,
-        in lobortis sem porta sed. Integer id ultrices magna, in luctus elit. Sed a pellentesque
-        est.\n\n
-        Aenean nunc velit, lacinia sed dolor sed, ultrices viverra nulla. Etiam a venenatis nibh.
-        Morbi laoreet, tortor sed facilisis varius, nibh orci rhoncus nulla, id elementum leo dui
-        non lorem. Nam mollis ipsum quis auctor varius. Quisque elementum eu libero sed commodo. In
-        eros nisl, imperdiet vel imperdiet et, scelerisque a mauris. Pellentesque varius ex nunc,
-        quis imperdiet eros placerat ac. Duis finibus orci et est auctor tincidunt. Sed non viverra
-        ipsum. Nunc quis augue egestas, cursus lorem at, molestie sem. Morbi a consectetur ipsum, a
-        placerat diam. Etiam vulputate dignissim convallis. Integer faucibus mauris sit amet finibus
-        convallis.\n\n
-        Phasellus in aliquet mi. Pellentesque habitant morbi tristique senectus et netus et
-        malesuada fames ac turpis egestas. In volutpat arcu ut felis sagittis, in finibus massa
-        gravida. Pellentesque id tellus orci. Integer dictum, lorem sed efficitur ullamcorper,
-        libero justo consectetur ipsum, in mollis nisl ex sed nisl. Donec maximus ullamcorper
-        sodales. Praesent bibendum rhoncus tellus nec feugiat. In a ornare nulla. Donec rhoncus
-        libero vel nunc consequat, quis tincidunt nisl eleifend. Cras bibendum enim a justo luctus
-        vestibulum. Fusce dictum libero quis erat maximus, vitae volutpat diam dignissim.
-    </string>
-</resources>
-
-===== FILE: app\src\main\res\values\themes.xml =====
-
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Theme.VenusFlytrapMonitor" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
-        <!-- Primary brand color. -->
-        <item name="colorPrimary">@color/purple_500</item>
-        <item name="colorPrimaryVariant">@color/purple_700</item>
-        <item name="colorOnPrimary">@color/white</item>
-        <!-- Secondary brand color. -->
-        <item name="colorSecondary">@color/teal_200</item>
-        <item name="colorSecondaryVariant">@color/teal_700</item>
-        <item name="colorOnSecondary">@color/black</item>
-        <!-- Status bar color. -->
-        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
-        <!-- Customize your theme here. -->
-    </style>
-    <!-- Base application theme. -->
-    <style name="Base.Theme.VenusFlytrapMonitor" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
-    </style>
-</resources>
-
-===== FILE: app\src\main\res\values-land\dimens.xml =====
-
-<resources>
-    <dimen name="fab_margin">48dp</dimen>
-</resources>
-
-===== FILE: app\src\main\res\values-night\themes.xml =====
-
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Theme.VenusFlytrapMonitor" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
-        <!-- Primary brand color. -->
-        <item name="colorPrimary">@color/purple_200</item>
-        <item name="colorPrimaryVariant">@color/purple_700</item>
-        <item name="colorOnPrimary">@color/black</item>
-        <!-- Secondary brand color. -->
-        <item name="colorSecondary">@color/teal_200</item>
-        <item name="colorSecondaryVariant">@color/teal_200</item>
-        <item name="colorOnSecondary">@color/black</item>
-        <!-- Status bar color. -->
-        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
-        <!-- Customize your theme here. -->
-    </style>
-    <!-- Base application theme. -->
-    <style name="Base.Theme.VenusFlytrapMonitor" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your dark theme here. -->
-        <!-- <item name="colorPrimary">@color/my_dark_primary</item> -->
-    </style>
-</resources>
-
-===== FILE: app\src\main\res\values-v23\themes.xml =====
-
-<resources xmlns:tools="http://schemas.android.com/tools">
-
-    <style name="Theme.VenusFlytrapMonitor" parent="Base.Theme.VenusFlytrapMonitor">
-        <!-- Transparent system bars for edge-to-edge. -->
-        <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
-    </style>
-</resources>
-
-===== FILE: app\src\main\res\values-w1240dp\dimens.xml =====
-
-<resources>
-    <dimen name="fab_margin">200dp</dimen>
-</resources>
-
-===== FILE: app\src\main\res\values-w600dp\dimens.xml =====
-
-<resources>
-    <dimen name="fab_margin">48dp</dimen>
-</resources>
-
-===== FILE: app\src\main\res\xml\backup_rules.xml =====
-
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
--->
-<full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
-</full-backup-content>
-
-===== FILE: app\src\main\res\xml\data_extraction_rules.xml =====
-
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
--->
-<data-extraction-rules>
-    <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
-    </cloud-backup>
-    <!--
-    <device-transfer>
-        <include .../>
-        <exclude .../>
-    </device-transfer>
-    -->
-</data-extraction-rules>
-
-===== FILE: app\src\test\java\com\newvision\venusflytrapmonitor\ExampleUnitTest.java =====
-
-package com.newvision.venusflytrapmonitor;
-
-import org.junit.Test;
-
-import static org.junit.Assert.*;
-
-/**
- * Example local unit test, which will execute on the development machine (host).
- *
- * @see <a href="http://d.android.com/tools/testing">Testing documentation</a>
- */
-public class ExampleUnitTest {
-    @Test
-    public void addition_isCorrect() {
-        assertEquals(4, 2 + 2);
-    }
-}
-
-===== FILE: build.gradle =====
-
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
-plugins {
-    alias(libs.plugins.android.application) apply false
-}
-
-===== FILE: gradle.properties =====
-
-# Project-wide Gradle settings.
-# IDE (e.g. Android Studio) users:
-# Gradle settings configured through the IDE *will override*
-# any settings specified in this file.
-# For more details on how to configure your build environment visit
-# http://www.gradle.org/docs/current/userguide/build_environment.html
-# Specifies the JVM arguments used for the daemon process.
-# The setting is particularly useful for tweaking memory settings.
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-# When configured, Gradle will run in incubating parallel mode.
-# This option should only be used with decoupled projects. For more details, visit
-# https://developer.android.com/r/tools/gradle-multi-project-decoupled-projects
-# org.gradle.parallel=true
-# AndroidX package structure to make it clearer which packages are bundled with the
-# Android operating system, and which are packaged with your app's APK
-# https://developer.android.com/topic/libraries/support-library/androidx-rn
-android.useAndroidX=true
-# Enables namespacing of each library's R class so that its R class includes only the
-# resources declared in the library itself and none from the library's dependencies,
-# thereby reducing the size of the R class for that library
-android.nonTransitiveRClass=true
-
-===== FILE: gradle\libs.versions.toml =====
-
-[versions]
-agp = "9.0.0-alpha11"
-junit = "4.13.2"
-junitVersion = "1.3.0"
-espressoCore = "3.7.0"
-appcompat = "1.7.1"
-material = "1.13.0"
-constraintlayout = "2.2.1"
-navigationFragment = "2.6.0"
-navigationUi = "2.6.0"
-
-[libraries]
-junit = { group = "junit", name = "junit", version.ref = "junit" }
-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
-material = { group = "com.google.android.material", name = "material", version.ref = "material" }
-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
-navigation-fragment = { group = "androidx.navigation", name = "navigation-fragment", version.ref = "navigationFragment" }
-navigation-ui = { group = "androidx.navigation", name = "navigation-ui", version.ref = "navigationUi" }
-
-[plugins]
-android-application = { id = "com.android.application", version.ref = "agp" }
-
-
-
-===== FILE: gradle\wrapper\gradle-wrapper.properties =====
-
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-9.0.0-bin.zip
-networkTimeout=10000
-validateDistributionUrl=true
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-
-
-===== FILE: gradlew =====
-
-#!/bin/sh
-
-#
-# Copyright ֲ© 2015 the original authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
-#
-
-##############################################################################
-#
-#   Gradle start up script for POSIX generated by Gradle.
-#
-#   Important for running:
-#
-#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
-#       noncompliant, but you have some other compliant shell such as ksh or
-#       bash, then to run this script, type that shell name before the whole
-#       command line, like:
-#
-#           ksh Gradle
-#
-#       Busybox and similar reduced shells will NOT work, because this script
-#       requires all of these POSIX shell features:
-#         * functions;
-#         * expansions ֲ«$varֲ», ֲ«${var}ֲ», ֲ«${var:-default}ֲ», ֲ«${var+SET}ֲ»,
-#           ֲ«${var#prefix}ֲ», ֲ«${var%suffix}ֲ», and ֲ«$( cmd )ֲ»;
-#         * compound commands having a testable exit status, especially ֲ«caseֲ»;
-#         * various built-in commands including ֲ«commandֲ», ֲ«setֲ», and ֲ«ulimitֲ».
-#
-#   Important for patching:
-#
-#   (2) This script targets any POSIX shell, so it avoids extensions provided
-#       by Bash, Ksh, etc; in particular arrays are avoided.
-#
-#       The "traditional" practice of packing multiple parameters into a
-#       space-separated string is a well documented source of bugs and security
-#       problems, so this is (mostly) avoided, by progressively accumulating
-#       options in "$@", and eventually passing that to Java.
-#
-#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
-#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
-#       see the in-line comments for details.
-#
-#       There are tweaks for specific operating systems such as AIX, CygWin,
-#       Darwin, MinGW, and NonStop.
-#
-#   (3) This script is generated from the Groovy template
-#       https://github.com/gradle/gradle/blob/HEAD/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
-#       within the Gradle project.
-#
-#       You can find Gradle at https://github.com/gradle/gradle/.
-#
-##############################################################################
-
-# Attempt to set APP_HOME
-
-# Resolve links: $0 may be a link
-app_path=$0
-
-# Need this for daisy-chained symlinks.
-while
-    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
-    [ -h "$app_path" ]
-do
-    ls=$( ls -ld "$app_path" )
-    link=${ls#*' -> '}
-    case $link in             #(
-      /*)   app_path=$link ;; #(
-      *)    app_path=$APP_HOME$link ;;
-    esac
-done
-
-# This is normally unused
-# shellcheck disable=SC2034
-APP_BASE_NAME=${0##*/}
-# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
-APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
-
-# Use the maximum available, or set MAX_FD != -1 to use that value.
-MAX_FD=maximum
-
-warn () {
-    echo "$*"
-} >&2
-
-die () {
-    echo
-    echo "$*"
-    echo
-    exit 1
-} >&2
-
-# OS specific support (must be 'true' or 'false').
-cygwin=false
-msys=false
-darwin=false
-nonstop=false
-case "$( uname )" in                #(
-  CYGWIN* )         cygwin=true  ;; #(
-  Darwin* )         darwin=true  ;; #(
-  MSYS* | MINGW* )  msys=true    ;; #(
-  NONSTOP* )        nonstop=true ;;
-esac
-
-CLASSPATH="\\\"\\\""
-
-
-# Determine the Java command to use to start the JVM.
-if [ -n "$JAVA_HOME" ] ; then
-    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
-        # IBM's JDK on AIX uses strange locations for the executables
-        JAVACMD=$JAVA_HOME/jre/sh/java
-    else
-        JAVACMD=$JAVA_HOME/bin/java
-    fi
-    if [ ! -x "$JAVACMD" ] ; then
-        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
-
-Please set the JAVA_HOME variable in your environment to match the
-location of your Java installation."
-    fi
-else
-    JAVACMD=java
-    if ! command -v java >/dev/null 2>&1
-    then
-        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
-
-Please set the JAVA_HOME variable in your environment to match the
-location of your Java installation."
-    fi
-fi
-
-# Increase the maximum file descriptors if we can.
-if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
-    case $MAX_FD in #(
-      max*)
-        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
-        # shellcheck disable=SC2039,SC3045
-        MAX_FD=$( ulimit -H -n ) ||
-            warn "Could not query maximum file descriptor limit"
-    esac
-    case $MAX_FD in  #(
-      '' | soft) :;; #(
-      *)
-        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
-        # shellcheck disable=SC2039,SC3045
-        ulimit -n "$MAX_FD" ||
-            warn "Could not set maximum file descriptor limit to $MAX_FD"
-    esac
-fi
-
-# Collect all arguments for the java command, stacking in reverse order:
-#   * args from the command line
-#   * the main class name
-#   * -classpath
-#   * -D...appname settings
-#   * --module-path (only if needed)
-#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
-
-# For Cygwin or MSYS, switch paths to Windows format before running java
-if "$cygwin" || "$msys" ; then
-    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
-    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )
-
-    JAVACMD=$( cygpath --unix "$JAVACMD" )
-
-    # Now convert the arguments - kludge to limit ourselves to /bin/sh
-    for arg do
-        if
-            case $arg in                                #(
-              -*)   false ;;                            # don't mess with options #(
-              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
-                    [ -e "$t" ] ;;                      #(
-              *)    false ;;
-            esac
-        then
-            arg=$( cygpath --path --ignore --mixed "$arg" )
-        fi
-        # Roll the args list around exactly as many times as the number of
-        # args, so each arg winds up back in the position where it started, but
-        # possibly modified.
-        #
-        # NB: a `for` loop captures its iteration list before it begins, so
-        # changing the positional parameters here affects neither the number of
-        # iterations, nor the values presented in `arg`.
-        shift                   # remove old arg
-        set -- "$@" "$arg"      # push replacement arg
-    done
-fi
-
-
-# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
-
-# Collect all arguments for the java command:
-#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
-#     and any embedded shellness will be escaped.
-#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
-#     treated as '${Hostname}' itself on the command line.
-
-set -- \
-        "-Dorg.gradle.appname=$APP_BASE_NAME" \
-        -classpath "$CLASSPATH" \
-        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
-        "$@"
-
-# Stop when "xargs" is not available.
-if ! command -v xargs >/dev/null 2>&1
-then
-    die "xargs is not available"
-fi
-
-# Use "xargs" to parse quoted args.
-#
-# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
-#
-# In Bash we could simply go:
-#
-#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
-#   set -- "${ARGS[@]}" "$@"
-#
-# but POSIX shell has neither arrays nor command substitution, so instead we
-# post-process each arg (as a line of input to sed) to backslash-escape any
-# character that might be a shell metacharacter, then use eval to reverse
-# that process (while maintaining the separation between arguments), and wrap
-# the whole thing up as a single "set" statement.
-#
-# This will of course break if any of these variables contains a newline or
-# an unmatched quote.
-#
-
-eval "set -- $(
-        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
-        xargs -n1 |
-        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
-        tr '\n' ' '
-    )" '"$@"'
-
-exec "$JAVACMD" "$@"
-
-
-===== FILE: gradlew.bat =====
-
-@rem
-@rem Copyright 2015 the original author or authors.
-@rem
-@rem Licensed under the Apache License, Version 2.0 (the "License");
-@rem you may not use this file except in compliance with the License.
-@rem You may obtain a copy of the License at
-@rem
-@rem      https://www.apache.org/licenses/LICENSE-2.0
-@rem
-@rem Unless required by applicable law or agreed to in writing, software
-@rem distributed under the License is distributed on an "AS IS" BASIS,
-@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-@rem See the License for the specific language governing permissions and
-@rem limitations under the License.
-@rem
-@rem SPDX-License-Identifier: Apache-2.0
-@rem
-
-@if "%DEBUG%"=="" @echo off
-@rem ##########################################################################
-@rem
-@rem  Gradle startup script for Windows
-@rem
-@rem ##########################################################################
-
-@rem Set local scope for the variables with windows NT shell
-if "%OS%"=="Windows_NT" setlocal
-
-set DIRNAME=%~dp0
-if "%DIRNAME%"=="" set DIRNAME=.
-@rem This is normally unused
-set APP_BASE_NAME=%~n0
-set APP_HOME=%DIRNAME%
-
-@rem Resolve any "." and ".." in APP_HOME to make it shorter.
-for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
-
-@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
-
-@rem Find java.exe
-if defined JAVA_HOME goto findJavaFromJavaHome
-
-set JAVA_EXE=java.exe
-%JAVA_EXE% -version >NUL 2>&1
-if %ERRORLEVEL% equ 0 goto execute
-
-echo. 1>&2
-echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
-echo. 1>&2
-echo Please set the JAVA_HOME variable in your environment to match the 1>&2
-echo location of your Java installation. 1>&2
-
-goto fail
-
-:findJavaFromJavaHome
-set JAVA_HOME=%JAVA_HOME:"=%
-set JAVA_EXE=%JAVA_HOME%/bin/java.exe
-
-if exist "%JAVA_EXE%" goto execute
-
-echo. 1>&2
-echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
-echo. 1>&2
-echo Please set the JAVA_HOME variable in your environment to match the 1>&2
-echo location of your Java installation. 1>&2
-
-goto fail
-
-:execute
-@rem Setup the command line
-
-set CLASSPATH=
-
-
-@rem Execute Gradle
-"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %*
-
-:end
-@rem End local scope for the variables with windows NT shell
-if %ERRORLEVEL% equ 0 goto mainEnd
-
-:fail
-rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
-rem the _cmd.exe /c_ return code!
-set EXIT_CODE=%ERRORLEVEL%
-if %EXIT_CODE% equ 0 set EXIT_CODE=1
-if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
-exit /b %EXIT_CODE%
-
-:mainEnd
-if "%OS%"=="Windows_NT" endlocal
-
-:omega
-
-
-===== FILE: local.properties =====
-
-## This file is automatically generated by Android Studio.
-# Do not modify this file -- YOUR CHANGES WILL BE ERASED!
-#
-# This file should *NOT* be checked into Version Control Systems,
-# as it contains information specific to your local configuration.
-#
-# Location of the SDK. This is only used by Gradle.
-# For customization when using a Version Control System, please read the
-# header note.
-sdk.dir=G\:\\Program Files\\Android\\SDK
-
-===== FILE: settings.gradle =====
-
-pluginManagement {
-    repositories {
-        google {
-            content {
-                includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-
-rootProject.name = "VenusFlytrapMonitor"
-include ':app'
-
-
-
-
-
-===== FILE: app\.gitignore =====
-
-/build
-
-===== FILE: app\build.gradle =====
-
-plugins {
-    alias(libs.plugins.android.application)
-}
-
-android {
-    namespace 'com.newvision.venusflytrapmonitor'
-    compileSdk {
-        version = release(36)
-    }
-
-    defaultConfig {
-        applicationId "com.newvision.venusflytrapmonitor"
-        minSdk 26
-        targetSdk 36
-        versionCode 1
-        versionName "1.0"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
-    }
-    buildFeatures {
-        viewBinding true
-    }
-}
-
-dependencies {
-    implementation libs.appcompat
-    implementation libs.material
-    implementation libs.constraintlayout
-    implementation libs.navigation.fragment
-    implementation libs.navigation.ui
-    def camerax_version = "1.4.2"
-
-    implementation "androidx.camera:camera-core:$camerax_version"
-    implementation "androidx.camera:camera-camera2:$camerax_version"
-    implementation "androidx.camera:camera-lifecycle:$camerax_version"
-    implementation "androidx.camera:camera-view:$camerax_version"
+    implementation "androidx.camera:camera-video:$camerax_version"
 
     testImplementation libs.junit
     androidTestImplementation libs.ext.junit
@@ -3049,12 +271,20 @@ public class ExampleInstrumentedTest {
         }
 
         #controls {
-            margin-top: 15px;
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            display: flex;
+            gap: 8px;
+            background: rgba(255,255,255,0.85);
+            padding: 6px;
+            border-radius: 6px;
+            z-index: 50;
         }
 
         button {
-            padding: 8px 14px;
-            margin-right: 8px;
+            padding: 8px 10px;
+            margin: 0;
         }
 
         #statusPanel {
@@ -3077,6 +307,11 @@ public class ExampleInstrumentedTest {
         .statusRow.closed {
             background: #ffe5e5;
             border-color: #f3a0a0;
+        }
+
+        .statusRow.closing {
+            background: #fff6e0;
+            border-color: #f0cf7a;
         }
 
         .statusRow.open {
@@ -3113,6 +348,78 @@ public class ExampleInstrumentedTest {
             font-size: 14px;
         }
 
+        #thresholdForm .sectionLabel {
+            grid-column: 1 / -1;
+            font-size: 12px;
+            font-weight: bold;
+            color: #666;
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        #eventsPanel {
+            margin-top: 10px;
+            display: grid;
+            gap: 8px;
+            max-width: 640px;
+        }
+
+        .eventRow {
+            border: 1px solid #d8d8d8;
+            background: #f9f9f9;
+            border-radius: 6px;
+            padding: 8px 12px;
+        }
+
+        .eventRow.active {
+            background: #fff6e0;
+            border-color: #f0cf7a;
+        }
+
+        .eventRow.finalized {
+            background: #eaf9ee;
+            border-color: #abd7b0;
+        }
+
+        .eventHeader {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .eventTitle {
+            font-weight: bold;
+        }
+
+        .eventState {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .eventMeta {
+            font-size: 12px;
+            color: #555;
+            margin-top: 4px;
+        }
+
+        .eventSegments {
+            margin-top: 6px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .eventSegments a {
+            font-size: 12px;
+        }
+
+        #eventsEmpty {
+            color: #666;
+            font-size: 13px;
+        }
+
     </style>
 
 </head>
@@ -3131,59 +438,72 @@ public class ExampleInstrumentedTest {
 
         <!-- ROI elements are created by JavaScript -->
 
+        <div id="controls">
+
+            <button id="zoomOutButton"
+                    onclick="setZoomLevel(zoomLevel / 1.25)">
+                Zoom Out
+            </button>
+
+            <button id="zoomInButton"
+                    onclick="setZoomLevel(zoomLevel * 1.25)">
+                Zoom In
+            </button>
+
+            <button onclick="addTrap()">
+                Add Trap
+            </button>
+
+            <button onclick="deleteSelected()">
+                Delete Selected
+            </button>
+
+            <button onclick="saveTraps()">
+                Save
+            </button>
+
+        </div>
+
     </div>
 
     <div id="detailsPanel">
         <h2>Trap state</h2>
         <div id="statusPanel"></div>
 
+        <h2>Recent events</h2>
+        <div id="eventsPanel"></div>
+
         <h2>Detection thresholds</h2>
         <form id="thresholdForm" onsubmit="saveThresholds(event)">
-           <div class="field">
-               <label for="baselineAdaptMeanDiffThreshold">Baseline adapt mean diff</label>
-               <input id="baselineAdaptMeanDiffThreshold" type="number" step="0.1" min="0" />
-           </div>
-           <div class="field">
-               <label for="cellChangeThreshold">Cell change threshold</label>
-               <input id="cellChangeThreshold" type="number" step="0.5" min="0" />
-           </div>
-           <div class="field">
-               <label for="closedMeanDiffThreshold">Trap closed mean diff</label>
-               <input id="closedMeanDiffThreshold" type="number" step="0.5" min="0" />
-           </div>
-           <div class="field">
-               <label for="closedChangedFractionThreshold">Closed changed fraction</label>
-               <input id="closedChangedFractionThreshold" type="number" step="0.01" min="0" max="1" />
-           </div>
-           <button type="submit">Save thresholds</button>
+            <div class="sectionLabel">Per-frame signal</div>
+            <div class="field">
+                <label for="baselineAdaptMeanDiffThreshold">Baseline adapt mean diff</label>
+                <input id="baselineAdaptMeanDiffThreshold" type="number" step="0.1" min="0" />
+            </div>
+            <div class="field">
+                <label for="cellChangeThreshold">Cell change threshold</label>
+                <input id="cellChangeThreshold" type="number" step="0.5" min="0" />
+            </div>
+            <div class="field">
+                <label for="closedMeanDiffThreshold">Trap closed mean diff</label>
+                <input id="closedMeanDiffThreshold" type="number" step="0.5" min="0" />
+            </div>
+            <div class="field">
+                <label for="closedChangedFractionThreshold">Closed changed fraction</label>
+                <input id="closedChangedFractionThreshold" type="number" step="0.01" min="0" max="1" />
+            </div>
+            <div class="sectionLabel">Closing confirmation (hysteresis)</div>
+            <div class="field">
+                <label for="minClosingFrames">Min. consecutive frames</label>
+                <input id="minClosingFrames" type="number" step="1" min="1" />
+            </div>
+            <div class="field">
+                <label for="minClosingDurationMs">Min. duration (ms)</label>
+                <input id="minClosingDurationMs" type="number" step="50" min="0" />
+            </div>
+            <button type="submit">Save thresholds</button>
         </form>
     </div>
-</div>
-
-<div id="controls">
-
-    <button id="zoomOutButton"
-            onclick="setZoomLevel(zoomLevel / 1.25)">
-        Zoom Out
-    </button>
-
-    <button id="zoomInButton"
-            onclick="setZoomLevel(zoomLevel * 1.25)">
-        Zoom In
-    </button>
-
-    <button onclick="addTrap()">
-        Add Trap
-    </button>
-
-    <button onclick="deleteSelected()">
-        Delete Selected
-    </button>
-
-    <button onclick="saveTraps()">
-        Save
-    </button>
-
 </div>
 
 <script>
@@ -3849,6 +1169,20 @@ public class ExampleInstrumentedTest {
         nextTrapId = document.querySelectorAll('.roi').length + 1;
     }
 
+    function handleTrapKeyDelete(event) {
+        const isDeleteKey =
+            event.key === 'Delete' ||
+            event.key === 'Del' ||
+            event.code === 'Delete';
+
+        if (!isDeleteKey || selectedRoi === null) {
+            return;
+        }
+
+        event.preventDefault();
+        deleteSelected();
+    }
+
     function clearTrapRois() {
         const rois = document.querySelectorAll('.roi');
         rois.forEach(function(roi) {
@@ -3992,12 +1326,26 @@ public class ExampleInstrumentedTest {
             });
     }
 
+    /*
+     * Maps a trap's server-reported state to the CSS class and label used
+     * in the status panel. Falls back to the legacy "closed" boolean for
+     * compatibility if an older server build doesn't send "state" yet.
+     */
+    function classifyTrapState(trap) {
+
+        if (trap.state === 'CLOSED' || trap.state === 'CLOSING' || trap.state === 'OPEN') {
+            return trap.state;
+        }
+
+        return trap.closed ? 'CLOSED' : 'OPEN';
+    }
+
     function renderStatus(statusResponse) {
 
         const panel = document.getElementById('statusPanel');
 
         if (!statusResponse || !Array.isArray(statusResponse.traps)) {
-            panel.innerHTML = '<div class="statusRow open"><div>Waiting for trap dataג€¦</div></div>';
+            panel.innerHTML = '<div class="statusRow open"><div>Waiting for trap data׳’ג‚¬ֲ¦</div></div>';
             return;
         }
 
@@ -4008,15 +1356,15 @@ public class ExampleInstrumentedTest {
 
         const rows = statusResponse.traps.map(function(trap) {
 
-            const stateLabel = trap.closed ? 'CLOSED' : 'OPEN';
-            const rowClass = trap.closed ? 'closed' : 'open';
+            const state = classifyTrapState(trap);
+            const rowClass = state.toLowerCase();
             const meanDiff = Number(trap.meanDiff || 0).toFixed(1);
             const changedFraction = Number(trap.changedFraction || 0).toFixed(2);
 
             return '<div class="statusRow ' + rowClass + '">' +
                 '<div>Trap ' + trap.id + '</div>' +
-                '<div class="statusState">' + stateLabel + '</div>' +
-                '<div>־”=' + meanDiff + '</div>' +
+                '<div class="statusState">' + state + '</div>' +
+                '<div>ײ¾ג€=' + meanDiff + '</div>' +
                 '<div>Changed=' + changedFraction + '</div>' +
                 '</div>';
         });
@@ -4040,6 +1388,139 @@ public class ExampleInstrumentedTest {
             });
     }
 
+    /*
+     * Formats an eventId like "trap2_20260918_143012" into a short,
+     * readable label. Falls back to the raw eventId if it doesn't match
+     * the expected pattern.
+     */
+    function formatEventLabel(eventId) {
+
+        const match = /^trap(\d+)_(\d{8})_(\d{6})$/.exec(eventId || '');
+
+        if (!match) {
+            return eventId;
+        }
+
+        const trapId = match[1];
+        const datePart = match[2];
+        const timePart = match[3];
+
+        const year = datePart.slice(0, 4);
+        const month = datePart.slice(4, 6);
+        const day = datePart.slice(6, 8);
+
+        const hour = timePart.slice(0, 2);
+        const minute = timePart.slice(2, 4);
+        const second = timePart.slice(4, 6);
+
+        return 'Trap ' + trapId + ' ג€” ' +
+            year + '-' + month + '-' + day + ' ' +
+            hour + ':' + minute + ':' + second;
+    }
+
+    function renderEvents(events) {
+
+        const panel = document.getElementById('eventsPanel');
+
+        if (!Array.isArray(events)) {
+            panel.innerHTML = '<div id="eventsEmpty">Failed to load events.</div>';
+            return;
+        }
+
+        if (events.length === 0) {
+            panel.innerHTML = '<div id="eventsEmpty">No events recorded yet.</div>';
+            return;
+        }
+
+        const rows = events.map(function(event) {
+
+            const finalized = event.finalized === true;
+            const rowClass = finalized ? 'finalized' : 'active';
+            const label = formatEventLabel(event.eventId);
+
+            let metaHtml = '';
+            let segmentsHtml = '';
+
+            if (finalized && event.metadata) {
+
+                const segments = Array.isArray(event.metadata.segments) ? event.metadata.segments : [];
+
+                metaHtml = '<div class="eventMeta">' + segments.length + ' segment(s)' + '</div>';
+
+                segmentsHtml = '<div class="eventSegments">';
+
+                segments.forEach(function(fileName) {
+                    const url = '/events/' + encodeURIComponent(event.eventId) + '/' + encodeURIComponent(fileName);
+                    const escEventId = event.eventId.replace(/'/g, "\\'" );
+                    const escFileName = fileName.replace(/'/g, "\\'");
+                    segmentsHtml += '<div style="display:inline-flex;align-items:center;gap:6px;margin-right:6px;">' +
+                        '<a href="' + url + '" target="_blank">' + fileName + '</a>' +
+                        '<button onclick="deleteEventFile(\'' + escEventId + '\', \'" + escFileName + "\')">Delete</button>' +
+                        '</div>';
+                });
+
+                segmentsHtml += '</div>';
+
+            } else {
+
+                const segmentCount = Number(event.segmentCount || 0);
+                metaHtml = '<div class="eventMeta">Recording ג€” ' + segmentCount + ' segment(s) so far</div>';
+            }
+
+            const escEvent = event.eventId.replace(/'/g, "\\'");
+            const deleteBtn = '<button style="margin-left:8px;" onclick="deleteEvent(\'' + escEvent + '\')">Delete Event</button>';
+
+            return '<div class="eventRow ' + rowClass + '">' +
+                '<div class="eventHeader">' +
+                '<div class="eventTitle">' + label + '</div>' +
+                '<div class="eventState">' + (finalized ? 'Finalized' : 'Recording') + deleteBtn + '</div>' +
+                '</div>' +
+                metaHtml +
+                segmentsHtml +
+                '</div>';
+        });
+
+        panel.innerHTML = rows.join('');
+    }
+
+    function deleteEvent(eventId) {
+        if (!confirm('Delete event ' + eventId + '?')) return;
+        fetch('/events/' + encodeURIComponent(eventId), { method: 'DELETE' })
+            .then(function(response) {
+                if (!response.ok) throw new Error('Server returned ' + response.status);
+                return response.text();
+            })
+            .then(function() { loadEvents(); })
+            .catch(function(error) { console.error('Failed to delete event:', error); alert('Failed to delete event: ' + error.message); });
+    }
+
+    function deleteEventFile(eventId, fileName) {
+        if (!confirm('Delete file ' + fileName + ' from ' + eventId + '?')) return;
+        fetch('/events/' + encodeURIComponent(eventId) + '/' + encodeURIComponent(fileName), { method: 'DELETE' })
+            .then(function(response) {
+                if (!response.ok) throw new Error('Server returned ' + response.status);
+                return response.text();
+            })
+            .then(function() { loadEvents(); })
+            .catch(function(error) { console.error('Failed to delete file:', error); alert('Failed to delete file: ' + error.message); });
+    }
+
+    function loadEvents() {
+        fetch('/events')
+            .then(function(response) {
+                if (!response.ok) {
+                    throw new Error('Server returned ' + response.status);
+                }
+                return response.json();
+            })
+            .then(function(events) {
+                renderEvents(events);
+            })
+            .catch(function(error) {
+                console.error('Failed to load events:', error);
+            });
+    }
+
     function loadThresholds() {
 
         fetch('/thresholds')
@@ -4054,6 +1535,10 @@ public class ExampleInstrumentedTest {
                 document.getElementById('cellChangeThreshold').value = thresholds.cellChangeThreshold;
                 document.getElementById('closedMeanDiffThreshold').value = thresholds.closedMeanDiffThreshold;
                 document.getElementById('closedChangedFractionThreshold').value = thresholds.closedChangedFractionThreshold;
+                document.getElementById('minClosingFrames').value =
+                    thresholds.minClosingFrames !== undefined ? thresholds.minClosingFrames : 5;
+                document.getElementById('minClosingDurationMs').value =
+                    thresholds.minClosingDurationMs !== undefined ? thresholds.minClosingDurationMs : 800;
             })
             .catch(function(error) {
                 console.error('Failed to load thresholds:', error);
@@ -4070,7 +1555,9 @@ public class ExampleInstrumentedTest {
             baselineAdaptMeanDiffThreshold: Number(document.getElementById('baselineAdaptMeanDiffThreshold').value),
             cellChangeThreshold: Number(document.getElementById('cellChangeThreshold').value),
             closedMeanDiffThreshold: Number(document.getElementById('closedMeanDiffThreshold').value),
-            closedChangedFractionThreshold: Number(document.getElementById('closedChangedFractionThreshold').value)
+            closedChangedFractionThreshold: Number(document.getElementById('closedChangedFractionThreshold').value),
+            minClosingFrames: Number(document.getElementById('minClosingFrames').value),
+            minClosingDurationMs: Number(document.getElementById('minClosingDurationMs').value)
         };
 
         fetch('/thresholds', {
@@ -4234,10 +1721,13 @@ public class ExampleInstrumentedTest {
      * Load persisted ROIs and zoom when the
      * browser page starts.
      */
+    document.addEventListener('keydown', handleTrapKeyDelete);
+
     loadThresholds();
     loadTraps();
     loadStatus();
     loadBattery();
+    loadEvents();
 
     updateZoomButtons();
 
@@ -4260,6 +1750,7 @@ public class ExampleInstrumentedTest {
 
     setInterval(loadStatus, 1000);
     setInterval(loadBattery, 15000);
+    setInterval(loadEvents, 5000);
 
 </script>
 
@@ -4267,10 +1758,374 @@ public class ExampleInstrumentedTest {
 
 </html>
 
+===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\EventRecorder.java =====
+
+package com.newvision.venusflytrapmonitor;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.camera.video.FileOutputOptions;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.Recording;
+import androidx.camera.video.VideoRecordEvent;
+import androidx.core.content.ContextCompat;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Manages a rolling buffer of short video segments and preserves a window of
+ * segments around a detected trap closure event.
+ *
+ * Approach: record continuously in fixed-length segments (SEGMENT_DURATION_MS).
+ * The most recent ROLLING_BUFFER_SEGMENTS completed segments are always kept
+ * on disk as a pre-event buffer; older ones are deleted. When a trap enters
+ * CLOSING, the segments currently in the rolling buffer are copied into a new
+ * event folder, and any segment that completes while the event is still
+ * "active" (through CLOSED confirmation plus a short post-event window) is
+ * copied into that same folder too.
+ *
+ * KNOWN LIMITATION: this does not stitch segments into a single file. An
+ * event folder can contain multiple 15s segment files whose combined
+ * duration exceeds the "<=30s single clip" ideal from the spec. Trimming
+ * these into one exact clip would need MediaMuxer-based re-encoding - left
+ * as a follow-up once this capture pipeline is verified working.
+ *
+ * NOT YET HANDLED: unbounded growth of the events/ folder over time (see
+ * Phase F "prevent unbounded storage usage" in the handoff doc).
+ */
+public class EventRecorder {
+
+    private static final String TAG = "EventRecorder";
+
+    private static final long SEGMENT_DURATION_MS = 15000;
+    private static final int ROLLING_BUFFER_SEGMENTS = 2;
+
+    // How long to keep tagging new segments into an event folder after a
+    // trap is confirmed CLOSED, to capture some post-event context.
+    private static final long POST_EVENT_WINDOW_MS = 10000;
+
+    private final Context context;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    private Recorder recorder;
+    private Recording currentRecording;
+
+    private final File segmentsDir;
+    private final File eventsDir;
+
+    // Completed segment files still in the rolling buffer, oldest first.
+    private final List<File> rollingSegments = new ArrayList<>();
+
+    // trapId -> active event bookkeeping.
+    private final Map<Integer, ActiveEvent> activeEvents = new HashMap<>();
+
+    private boolean running = false;
+
+    private static class ActiveEvent {
+        final String eventId;
+        final File folder;
+        final long startTime;
+        boolean closedConfirmed = false;
+        long closedConfirmedTime = 0;
+        final JSONArray segmentFiles = new JSONArray();
+
+        ActiveEvent(String eventId, File folder, long startTime) {
+            this.eventId = eventId;
+            this.folder = folder;
+            this.startTime = startTime;
+        }
+    }
+
+    public EventRecorder(Context context) {
+        this.context = context.getApplicationContext();
+        this.segmentsDir = new File(context.getExternalFilesDir(null), "segments");
+        this.eventsDir = new File(context.getExternalFilesDir(null), "events");
+        //noinspection ResultOfMethodCallIgnored
+        segmentsDir.mkdirs();
+        //noinspection ResultOfMethodCallIgnored
+        eventsDir.mkdirs();
+    }
+
+    /**
+     * Begins rolling segmented recording using the given Recorder. The
+     * Recorder must already be bound into an active CameraX VideoCapture
+     * use case before this is called.
+     */
+    public void start(Recorder recorder) {
+        this.recorder = recorder;
+        running = true;
+        startNextSegment();
+    }
+
+    public void stop() {
+        running = false;
+        handler.removeCallbacksAndMessages(null);
+
+        if (currentRecording != null) {
+            currentRecording.stop();
+            currentRecording = null;
+        }
+    }
+
+    private void startNextSegment() {
+
+        if (!running || recorder == null) {
+            return;
+        }
+
+        String fileName = "segment_" + System.currentTimeMillis() + ".mp4";
+        File outputFile = new File(segmentsDir, fileName);
+
+        FileOutputOptions outputOptions =
+                new FileOutputOptions.Builder(outputFile).build();
+
+        currentRecording = recorder
+                .prepareRecording(context, outputOptions)
+                .start(ContextCompat.getMainExecutor(context), this::onVideoRecordEvent);
+
+        handler.postDelayed(this::rotateSegment, SEGMENT_DURATION_MS);
+    }
+
+    private void rotateSegment() {
+
+        if (currentRecording != null) {
+            currentRecording.stop();
+            currentRecording = null;
+        }
+        // The next segment starts once Finalize arrives in
+        // onVideoRecordEvent(), to avoid overlapping recordings.
+    }
+
+    private void onVideoRecordEvent(@NonNull VideoRecordEvent event) {
+
+        if (!(event instanceof VideoRecordEvent.Finalize)) {
+            return;
+        }
+
+        VideoRecordEvent.Finalize finalizeEvent = (VideoRecordEvent.Finalize) event;
+
+        if (finalizeEvent.hasError()) {
+            Log.e(TAG, "Segment recording error: " + finalizeEvent.getError());
+        }
+
+        File finishedFile = new File(
+                finalizeEvent.getOutputResults().getOutputUri().getPath()
+        );
+
+        onSegmentFinished(finishedFile);
+
+        if (running) {
+            startNextSegment();
+        }
+    }
+
+    private void onSegmentFinished(File segmentFile) {
+
+        rollingSegments.add(segmentFile);
+
+        for (ActiveEvent activeEvent : activeEvents.values()) {
+            copySegmentIntoEvent(segmentFile, activeEvent);
+        }
+
+        while (rollingSegments.size() > ROLLING_BUFFER_SEGMENTS) {
+
+            File oldest = rollingSegments.get(0);
+
+            if (isReferencedByActiveEvent(oldest)) {
+                break;
+            }
+
+            rollingSegments.remove(0);
+            //noinspection ResultOfMethodCallIgnored
+            oldest.delete();
+        }
+
+        long now = System.currentTimeMillis();
+        List<Integer> finishedTrapIds = new ArrayList<>();
+
+        for (Map.Entry<Integer, ActiveEvent> entry : activeEvents.entrySet()) {
+            ActiveEvent activeEvent = entry.getValue();
+            if (activeEvent.closedConfirmed
+                    && now - activeEvent.closedConfirmedTime >= POST_EVENT_WINDOW_MS) {
+                finalizeEvent(activeEvent);
+                finishedTrapIds.add(entry.getKey());
+            }
+        }
+
+        for (Integer trapId : finishedTrapIds) {
+            activeEvents.remove(trapId);
+        }
+    }
+
+    private boolean isReferencedByActiveEvent(File segmentFile) {
+        for (ActiveEvent activeEvent : activeEvents.values()) {
+            for (int i = 0; i < activeEvent.segmentFiles.length(); i++) {
+                if (segmentFile.getName().equals(activeEvent.segmentFiles.optString(i))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void copySegmentIntoEvent(File segmentFile, ActiveEvent activeEvent) {
+
+        try {
+            File dest = new File(activeEvent.folder, segmentFile.getName());
+
+            if (!dest.exists()) {
+                copyFile(segmentFile, dest);
+                activeEvent.segmentFiles.put(segmentFile.getName());
+            }
+
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to copy segment into event folder", e);
+        }
+    }
+
+    private void copyFile(File source, File dest) throws IOException {
+
+        try (FileInputStream in = new FileInputStream(source);
+             FileOutputStream out = new FileOutputStream(dest)) {
+
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+        }
+    }
+
+    /**
+     * Called from TrapDetector's state-change listener.
+     */
+    public void onTrapStateChanged(
+            int trapId,
+            TrapDetector.TrapState oldState,
+            TrapDetector.TrapState newState
+    ) {
+
+        if (oldState == TrapDetector.TrapState.OPEN
+                && newState == TrapDetector.TrapState.CLOSING) {
+
+            beginEvent(trapId);
+
+        } else if (newState == TrapDetector.TrapState.OPEN
+                && activeEvents.containsKey(trapId)) {
+
+            // Reverted before confirming - spurious spike, discard.
+            abortEvent(trapId);
+
+        } else if (newState == TrapDetector.TrapState.CLOSED
+                && activeEvents.containsKey(trapId)) {
+
+            ActiveEvent activeEvent = activeEvents.get(trapId);
+            activeEvent.closedConfirmed = true;
+            activeEvent.closedConfirmedTime = System.currentTimeMillis();
+        }
+    }
+
+    private void beginEvent(int trapId) {
+
+        if (activeEvents.containsKey(trapId)) {
+            return;
+        }
+
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                .format(new Date());
+        String eventId = "trap" + trapId + "_" + timestamp;
+
+        File folder = new File(eventsDir, eventId);
+        //noinspection ResultOfMethodCallIgnored
+        folder.mkdirs();
+
+        ActiveEvent activeEvent = new ActiveEvent(eventId, folder, System.currentTimeMillis());
+        activeEvents.put(trapId, activeEvent);
+
+        // Seed with whatever's already in the rolling buffer as pre-event
+        // context.
+        for (File segment : rollingSegments) {
+            copySegmentIntoEvent(segment, activeEvent);
+        }
+
+        Log.d(TAG, "Event started for trap " + trapId + ": " + eventId);
+    }
+
+    private void abortEvent(int trapId) {
+
+        ActiveEvent activeEvent = activeEvents.remove(trapId);
+
+        if (activeEvent != null) {
+            deleteRecursive(activeEvent.folder);
+            Log.d(TAG, "Event aborted for trap " + trapId + " (spurious signal)");
+        }
+    }
+
+    private void finalizeEvent(ActiveEvent activeEvent) {
+
+        try {
+            JSONObject metadata = new JSONObject();
+            metadata.put("eventId", activeEvent.eventId);
+            metadata.put("startTime", activeEvent.startTime);
+            metadata.put("closedConfirmedTime", activeEvent.closedConfirmedTime);
+            metadata.put("finalizedTime", System.currentTimeMillis());
+            metadata.put("segments", activeEvent.segmentFiles);
+
+            File metadataFile = new File(activeEvent.folder, "metadata.json");
+
+            try (FileWriter writer = new FileWriter(metadataFile)) {
+                writer.write(metadata.toString());
+            }
+
+            Log.d(TAG, "Event finalized: " + activeEvent.eventId
+                    + " (" + activeEvent.segmentFiles.length() + " segment(s))");
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to write event metadata", e);
+        }
+    }
+
+    private void deleteRecursive(File file) {
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        //noinspection ResultOfMethodCallIgnored
+        file.delete();
+    }
+
+    public File getEventsDir() {
+        return eventsDir;
+    }
+}
+
 ===== FILE: app\src\main\java\com\newvision\venusflytrapmonitor\MainActivity.java =====
 
 package com.newvision.venusflytrapmonitor;
 
+import android.graphics.Color;
 import android.graphics.Matrix;
 import android.Manifest;
 import android.content.SharedPreferences;
@@ -4281,6 +2136,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 
 import androidx.activity.result.ActivityResultLauncher;
@@ -4292,6 +2149,10 @@ import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.video.Quality;
+import androidx.camera.video.QualitySelector;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.VideoCapture;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 
@@ -4309,7 +2170,23 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "VenusMonitor";
 
+    // Frames are only fully processed (bitmap conversion, detection, JPEG
+    // encode) at most this often. Nothing currently consumes frames faster
+    // than this (the browser polls /preview every 300ms), so processing
+    // every camera frame - likely ~30fps - was pure wasted CPU/battery.
+    private static final long FRAME_PROCESS_INTERVAL_MS = 300;
+
+    // Fallback dim level, kept as a safety net underneath the black overlay
+    // below (e.g. in case the overlay doesn't fully cover system bars on
+    // some device). The overlay, not this, is what actually saves battery
+    // on an AMOLED panel - dimming alone still renders a bright, colorful
+    // camera image at reduced scale, which still draws real power per
+    // pixel.
+    private static final float DIMMED_SCREEN_BRIGHTNESS = 0.01f;
+
     private PreviewView previewView;
+
+    private View blackoutView;
 
     private ExecutorService analysisExecutor;
 
@@ -4317,13 +2194,25 @@ public class MainActivity extends AppCompatActivity {
 
     private TrapDetector trapDetector;
 
+    private ProcessCameraProvider cameraProvider;
+
     private Camera camera;
+
+    private Recorder videoRecorder;
+
+    private VideoCapture<Recorder> videoCapture;
+
+    private EventRecorder eventRecorder;
+
+    private boolean previewBound = false;
 
     private float currentZoomRatio = 1.0f;
 
     private float pinchStartDistance = 0.0f;
 
     private byte[] latestJpeg;
+
+    private long lastProcessedFrameTime = 0;
 
     private final Handler batteryHandler = new Handler(Looper.getMainLooper());
     private final Runnable batteryRefreshRunnable = new Runnable() {
@@ -4368,8 +2257,27 @@ public class MainActivity extends AppCompatActivity {
 
         previewView.setOnTouchListener(this::handlePreviewTouch);
 
+        // Solid black overlay, added on top of the whole window content
+        // regardless of activity_main.xml's layout structure. This is what
+        // actually saves power on an AMOLED display once monitoring is
+        // unattended - true black pixels draw near-zero current, unlike a
+        // dimmed-but-still-colorful camera image.
+        blackoutView = new View(this);
+        blackoutView.setBackgroundColor(Color.BLACK);
+        blackoutView.setVisibility(View.GONE);
+
+        addContentView(
+                blackoutView,
+                new ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                )
+        );
+
         analysisExecutor =
                 Executors.newSingleThreadExecutor();
+
+        eventRecorder = new EventRecorder(this);
 
         webServer =
                 new WebServer(this);
@@ -4377,6 +2285,7 @@ public class MainActivity extends AppCompatActivity {
         webServer.setZoomChangeListener(this::applyZoomRatio);
         webServer.setTrapConfigChangeListener(this::reloadTrapConfiguration);
         webServer.setBatteryLevelPercent(getBatteryPercentage());
+        webServer.setEventRecorder(eventRecorder);
         webServer.start();
         batteryHandler.post(batteryRefreshRunnable);
 
@@ -4405,12 +2314,48 @@ public class MainActivity extends AppCompatActivity {
         trapDetector = new TrapDetector(traps);
         webServer.setTrapDetector(trapDetector);
 
+        trapDetector.setStateListener((trapId, oldState, newState) -> {
+            if (eventRecorder != null) {
+                eventRecorder.onTrapStateChanged(trapId, oldState, newState);
+            }
+        });
+
+        applyUnattendedDisplayState();
+
         Log.d(
                 TAG,
                 "Reloaded trap configuration: " +
                         traps.length() +
                         " ROI(s)"
         );
+    }
+
+    // Once at least one ROI is saved, zoom/ROI editing is already locked
+    // (see WebServer's /zoom rule) and there is nothing left on-screen that
+    // needs to be visible. At that point: black out the display for real
+    // (not just dim it), and drop the CameraX Preview use case entirely so
+    // the display-compositing pipeline isn't doing that work either.
+    // Reverts back to a normal, visible preview whenever there are no
+    // saved ROIs (setup mode), since that's when the live image is
+    // actually being looked at for zoom/ROI placement.
+    private void applyUnattendedDisplayState() {
+
+        boolean hasRois =
+                trapDetector != null && trapDetector.hasConfiguredRois();
+
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+
+        params.screenBrightness = hasRois
+                ? DIMMED_SCREEN_BRIGHTNESS
+                : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+
+        getWindow().setAttributes(params);
+
+        if (blackoutView != null) {
+            blackoutView.setVisibility(hasRois ? View.VISIBLE : View.GONE);
+        }
+
+        applyCameraBinding();
     }
 
     private void loadTrapConfiguration() {
@@ -4545,13 +2490,10 @@ public class MainActivity extends AppCompatActivity {
 
                     try {
 
-                        ProcessCameraProvider
-                                cameraProvider =
+                        cameraProvider =
                                 cameraProviderFuture.get();
 
-                        bindCamera(
-                                cameraProvider
-                        );
+                        applyCameraBinding();
 
                     } catch (Exception e) {
 
@@ -4567,22 +2509,25 @@ public class MainActivity extends AppCompatActivity {
         );
     }
 
-    private void bindCamera(
-            ProcessCameraProvider cameraProvider
-    ) {
+    // Binds ImageAnalysis always, and additionally binds Preview only while
+    // there are no saved ROIs (setup mode). Rebinding only happens when the
+    // desired state actually changes, to avoid unnecessarily restarting the
+    // camera pipeline on every ROI save.
+    private void applyCameraBinding() {
 
-        Preview preview =
-                new Preview.Builder()
-                        .setTargetRotation(
-                                getWindowManager()
-                                        .getDefaultDisplay()
-                                        .getRotation()
-                        )
-                        .build();
+        if (cameraProvider == null) {
+            return;
+        }
 
-        preview.setSurfaceProvider(
-                previewView.getSurfaceProvider()
-        );
+        boolean hasRois =
+                trapDetector != null && trapDetector.hasConfiguredRois();
+
+        boolean wantPreview = !hasRois;
+
+        if (camera != null && wantPreview == previewBound) {
+            // Already in the desired state.
+            return;
+        }
 
         ImageAnalysis imageAnalysis =
                 new ImageAnalysis.Builder()
@@ -4597,8 +2542,6 @@ public class MainActivity extends AppCompatActivity {
                         )
                         .build();
 
-
-
         imageAnalysis.setAnalyzer(
                 analysisExecutor,
                 this::analyzeFrame
@@ -4609,12 +2552,64 @@ public class MainActivity extends AppCompatActivity {
 
         cameraProvider.unbindAll();
 
-        camera = cameraProvider.bindToLifecycle(
-                this,
-                cameraSelector,
-                preview,
-                imageAnalysis
-        );
+        if (wantPreview) {
+
+            if (eventRecorder != null) {
+                eventRecorder.stop();
+            }
+
+            Preview preview =
+                    new Preview.Builder()
+                            .setTargetRotation(
+                                    getWindowManager()
+                                            .getDefaultDisplay()
+                                            .getRotation()
+                            )
+                            .build();
+
+            preview.setSurfaceProvider(
+                    previewView.getSurfaceProvider()
+            );
+
+            camera = cameraProvider.bindToLifecycle(
+                    this,
+                    cameraSelector,
+                    preview,
+                    imageAnalysis
+            );
+
+        } else {
+
+            // No Preview use case at all - the on-screen PreviewView isn't
+            // needed once ROIs are locked (see applyUnattendedDisplayState).
+            // VideoCapture is bound instead, so the rolling pre-event
+            // segment buffer (EventRecorder) can run. Note this reintroduces
+            // a continuous CPU/battery cost - encoding video the whole time
+            // monitoring is active - since a pre-event buffer requires
+            // always recording something. This works against the earlier
+            // battery fix; worth watching drain rate again after this
+            // change.
+            if (videoRecorder == null) {
+                QualitySelector qualitySelector = QualitySelector.from(Quality.SD);
+                videoRecorder = new Recorder.Builder()
+                        .setQualitySelector(qualitySelector)
+                        .build();
+                videoCapture = VideoCapture.withOutput(videoRecorder);
+            }
+
+            camera = cameraProvider.bindToLifecycle(
+                    this,
+                    cameraSelector,
+                    imageAnalysis,
+                    videoCapture
+            );
+
+            if (eventRecorder != null) {
+                eventRecorder.start(videoRecorder);
+            }
+        }
+
+        previewBound = wantPreview;
 
         applyZoomRatio(currentZoomRatio);
     }
@@ -4646,6 +2641,17 @@ public class MainActivity extends AppCompatActivity {
     private void analyzeFrame(
             ImageProxy imageProxy
     ) {
+
+        // Throttle: skip full processing for frames arriving faster than
+        // FRAME_PROCESS_INTERVAL_MS.
+        long now = System.currentTimeMillis();
+
+        if (now - lastProcessedFrameTime < FRAME_PROCESS_INTERVAL_MS) {
+            imageProxy.close();
+            return;
+        }
+
+        lastProcessedFrameTime = now;
 
         Bitmap bitmap = null;
 
@@ -4702,6 +2708,10 @@ public class MainActivity extends AppCompatActivity {
 
         batteryHandler.removeCallbacks(batteryRefreshRunnable);
 
+        if (eventRecorder != null) {
+            eventRecorder.stop();
+        }
+
         if (analysisExecutor != null) {
             analysisExecutor.shutdown();
         }
@@ -4742,11 +2752,27 @@ public class TrapDetector {
     // suspected. Small on purpose so brief flickers don't move the baseline.
     private static final float BASELINE_ADAPT_ALPHA = 0.02f;
 
+    public enum TrapState {
+        OPEN,
+        CLOSING,
+        CLOSED
+    }
+
+    public interface TrapStateListener {
+        void onStateChanged(int trapId, TrapState oldState, TrapState newState);
+    }
+
     public static class Thresholds {
         public float baselineAdaptMeanDiffThreshold = 8.0f;
         public float cellChangeThreshold = 15.0f;
         public float closedMeanDiffThreshold = 18.0f;
         public float closedChangedFractionThreshold = 0.18f;
+
+        // Hysteresis: once the per-frame signal first crosses the thresholds
+        // above (OPEN -> CLOSING), CLOSING only confirms to CLOSED once BOTH
+        // of these are satisfied while the signal stays active.
+        public int minClosingFrames = 5;
+        public long minClosingDurationMs = 800;
 
         public JSONObject toJson() {
             try {
@@ -4755,6 +2781,8 @@ public class TrapDetector {
                 json.put("cellChangeThreshold", cellChangeThreshold);
                 json.put("closedMeanDiffThreshold", closedMeanDiffThreshold);
                 json.put("closedChangedFractionThreshold", closedChangedFractionThreshold);
+                json.put("minClosingFrames", minClosingFrames);
+                json.put("minClosingDurationMs", minClosingDurationMs);
                 return json;
             } catch (JSONException e) {
                 return new JSONObject();
@@ -4784,6 +2812,14 @@ public class TrapDetector {
                 if (json.has("closedChangedFractionThreshold")) {
                     thresholds.closedChangedFractionThreshold = (float) json.getDouble("closedChangedFractionThreshold");
                 }
+
+                if (json.has("minClosingFrames")) {
+                    thresholds.minClosingFrames = Math.max(1, json.getInt("minClosingFrames"));
+                }
+
+                if (json.has("minClosingDurationMs")) {
+                    thresholds.minClosingDurationMs = Math.max(0, json.getLong("minClosingDurationMs"));
+                }
             } catch (JSONException e) {
                 return thresholds;
             }
@@ -4797,14 +2833,24 @@ public class TrapDetector {
     // baselineGrids[roiIndex][cellIndex], brightness 0-255 per cell.
     private final float[][] baselineGrids;
     private final int[] calibrationSampleCount;
-    private final boolean[] closedStates;
+    private final TrapState[] trapStates;
     private final float[] lastMeanDiffs;
     private final float[] lastChangedFractions;
+    private final float[] lastLightingShifts;
+
+    // Hysteresis bookkeeping while a ROI is in CLOSING.
+    private final long[] closingStartTime;
+    private final int[] closingFrameCount;
 
     private long calibrationStartTime = 0;
     private boolean calibrated = false;
     private long lastLogTime = 0;
     private Thresholds thresholds = new Thresholds();
+    private TrapStateListener stateListener;
+
+    public void setStateListener(TrapStateListener listener) {
+        this.stateListener = listener;
+    }
 
     public TrapDetector(JSONArray traps) {
 
@@ -4814,9 +2860,16 @@ public class TrapDetector {
 
         baselineGrids = new float[trapCount][GRID_CELLS];
         calibrationSampleCount = new int[trapCount];
-        closedStates = new boolean[trapCount];
+        trapStates = new TrapState[trapCount];
         lastMeanDiffs = new float[trapCount];
         lastChangedFractions = new float[trapCount];
+        lastLightingShifts = new float[trapCount];
+        closingStartTime = new long[trapCount];
+        closingFrameCount = new int[trapCount];
+
+        for (int i = 0; i < trapCount; i++) {
+            trapStates[i] = TrapState.OPEN;
+        }
     }
 
     public boolean hasConfiguredRois() {
@@ -4860,9 +2913,16 @@ public class TrapDetector {
             try {
                 JSONObject item = new JSONObject();
                 item.put("id", trap.optInt("id", i + 1));
-                item.put("closed", closedStates[i]);
+                item.put("state", trapStates[i].name());
+                item.put("closed", trapStates[i] == TrapState.CLOSED);
                 item.put("meanDiff", lastMeanDiffs[i]);
                 item.put("changedFraction", lastChangedFractions[i]);
+                // Diagnostic only: how much of the frame's overall
+                // brightness shift (e.g. a light being turned on/off) was
+                // subtracted out before computing meanDiff/changedFraction
+                // above. A large lightingShift with a small meanDiff is the
+                // normalization working as intended.
+                item.put("lightingShift", lastLightingShifts[i]);
                 item.put("calibrated", calibrated);
                 items.put(item);
             } catch (JSONException e) {
@@ -4877,10 +2937,20 @@ public class TrapDetector {
         for (int i = 0; i < traps.length(); i++) {
             JSONObject trap = traps.optJSONObject(i);
             if (trap != null && trap.optInt("id", i + 1) == trapId) {
-                return closedStates[i];
+                return trapStates[i] == TrapState.CLOSED;
             }
         }
         return false;
+    }
+
+    public TrapState getTrapState(int trapId) {
+        for (int i = 0; i < traps.length(); i++) {
+            JSONObject trap = traps.optJSONObject(i);
+            if (trap != null && trap.optInt("id", i + 1) == trapId) {
+                return trapStates[i];
+            }
+        }
+        return TrapState.OPEN;
     }
 
     public void analyzeFrame(Bitmap bitmap) {
@@ -4919,12 +2989,36 @@ public class TrapDetector {
 
                 } else {
 
+                    // Uniform-illumination normalization: estimate how much
+                    // the ROI's overall brightness shifted vs baseline (e.g.
+                    // a room light being switched on/off shifts every cell
+                    // by roughly the same amount), and subtract that shift
+                    // out before comparing individual cells. This way a
+                    // global lighting change - which affects all cells
+                    // equally - cancels out to near zero, while a real trap
+                    // closure - which changes some cells much more than
+                    // others - still shows up clearly.
+                    float currentMean = 0f;
+                    float baselineMean = 0f;
+
+                    for (int c = 0; c < GRID_CELLS; c++) {
+                        currentMean += currentGrid[c];
+                        baselineMean += baselineGrids[i][c];
+                    }
+
+                    currentMean /= GRID_CELLS;
+                    baselineMean /= GRID_CELLS;
+
+                    float lightingShift = currentMean - baselineMean;
+                    lastLightingShifts[i] = lightingShift;
+
                     float meanDiff = 0f;
                     int changedCells = 0;
 
                     for (int c = 0; c < GRID_CELLS; c++) {
 
-                        float cellDiff = Math.abs(currentGrid[c] - baselineGrids[i][c]);
+                        float normalizedCell = currentGrid[c] - lightingShift;
+                        float cellDiff = Math.abs(normalizedCell - baselineGrids[i][c]);
                         meanDiff += cellDiff;
 
                         if (cellDiff > thresholds.cellChangeThreshold) {
@@ -4937,11 +3031,28 @@ public class TrapDetector {
                     lastMeanDiffs[i] = meanDiff;
                     lastChangedFractions[i] = changedFraction;
 
-                    boolean trapClosed = meanDiff >= thresholds.closedMeanDiffThreshold
+                    boolean signalActive = meanDiff >= thresholds.closedMeanDiffThreshold
                             && changedFraction >= thresholds.closedChangedFractionThreshold;
-                    closedStates[i] = trapClosed;
 
-                    if (meanDiff < thresholds.baselineAdaptMeanDiffThreshold) {
+                    TrapState previousState = trapStates[i];
+                    updateTrapState(i, signalActive, now);
+
+                    if (trapStates[i] != previousState && stateListener != null) {
+                        stateListener.onStateChanged(
+                                trap.optInt("id", i + 1),
+                                previousState,
+                                trapStates[i]
+                        );
+                    }
+
+                    // Baseline is only allowed to adapt while OPEN, using the
+                    // normalized meanDiff - so genuine lighting shifts (now
+                    // already cancelled out above) no longer need to "wait"
+                    // for this slow adapt to correct them; this remains for
+                    // real slow spatial drift (e.g. a shadow's path changing
+                    // over the day, minor camera drift, dust).
+                    if (trapStates[i] == TrapState.OPEN
+                            && meanDiff < thresholds.baselineAdaptMeanDiffThreshold) {
 
                         for (int c = 0; c < GRID_CELLS; c++) {
                             baselineGrids[i][c] =
@@ -4950,11 +3061,16 @@ public class TrapDetector {
                         }
                     }
 
-                    if (shouldLog) {
+                    if (shouldLog || trapStates[i] != previousState) {
                         Log.d(TAG, "ROI " + trap.getInt("id")
                                 + ": meanDiff=" + meanDiff
                                 + ", changedFraction=" + changedFraction
-                                + ", closed=" + trapClosed);
+                                + ", lightingShift=" + lightingShift
+                                + ", state=" + trapStates[i]
+                                + (trapStates[i] == TrapState.CLOSING
+                                ? " (frames=" + closingFrameCount[i]
+                                + ", elapsedMs=" + (now - closingStartTime[i]) + ")"
+                                : ""));
                     }
                 }
             }
@@ -4988,6 +3104,45 @@ public class TrapDetector {
         }
     }
 
+    // Advances trapStates[i] through OPEN -> CLOSING -> CLOSED based on the
+    // current frame's signalActive flag. CLOSED is sticky (a trap does not
+    // spontaneously revert once confirmed shut); CLOSING reverts straight
+    // back to OPEN if the signal drops before confirmation, treating it as
+    // a spurious spike rather than a real event.
+    private void updateTrapState(int i, boolean signalActive, long now) {
+
+        switch (trapStates[i]) {
+
+            case OPEN:
+                if (signalActive) {
+                    trapStates[i] = TrapState.CLOSING;
+                    closingStartTime[i] = now;
+                    closingFrameCount[i] = 1;
+                }
+                break;
+
+            case CLOSING:
+                if (signalActive) {
+                    closingFrameCount[i]++;
+
+                    long elapsed = now - closingStartTime[i];
+
+                    if (closingFrameCount[i] >= thresholds.minClosingFrames
+                            && elapsed >= thresholds.minClosingDurationMs) {
+                        trapStates[i] = TrapState.CLOSED;
+                    }
+                } else {
+                    trapStates[i] = TrapState.OPEN;
+                    closingFrameCount[i] = 0;
+                }
+                break;
+
+            case CLOSED:
+                // Sticky: revisit only if automatic reopening is needed.
+                break;
+        }
+    }
+
     private int[] roiPixelBounds(JSONObject trap, Bitmap bitmap) throws Exception {
 
         float left = (float) trap.getDouble("left");
@@ -5003,9 +3158,6 @@ public class TrapDetector {
         return new int[]{x, y, width, height};
     }
 
-    // Resamples the ROI into a GRID_SIZE x GRID_SIZE grid of average
-    // grayscale brightness values (0-255), giving a coarse spatial signature
-    // instead of a single overall brightness number.
     private float[] computeGrid(Bitmap bitmap, int x, int y, int width, int height) {
 
         float[] grid = new float[GRID_CELLS];
@@ -5091,6 +3243,8 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -5098,6 +3252,7 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.function.Consumer;
 
@@ -5118,6 +3273,7 @@ public class WebServer {
     private volatile Consumer<JSONArray> trapConfigChangeListener;
     private volatile TrapDetector trapDetector;
     private volatile int batteryLevelPercent = 0;
+    private volatile EventRecorder eventRecorder;
 
     public WebServer(Context context) {
         this.context = context.getApplicationContext();
@@ -5143,6 +3299,10 @@ public class WebServer {
 
     public void setBatteryLevelPercent(int percent) {
         batteryLevelPercent = Math.max(0, Math.min(100, percent));
+    }
+
+    public void setEventRecorder(EventRecorder recorder) {
+        eventRecorder = recorder;
     }
 
     public void setTrapDetector(TrapDetector detector) {
@@ -5281,6 +3441,18 @@ public class WebServer {
             ) {
 
                 sendJson(socket, getBatteryPayload());
+
+            } else if (
+                    requestLine.startsWith("GET /events")
+            ) {
+
+                handleEventsGetRequest(socket, requestLine);
+
+            } else if (
+                    requestLine.startsWith("DELETE /events")
+            ) {
+
+                handleEventsDeleteRequest(socket, requestLine);
 
             } else if (
                     requestLine.startsWith("POST /traps")
@@ -5468,6 +3640,277 @@ public class WebServer {
         }
     }
 
+    // Dispatches GET /events (list) vs GET /events/<eventId>/<filename>
+    // (serve one file). requestLine looks like "GET /events/foo/bar.mp4
+    // HTTP/1.1" - split on spaces to isolate the path.
+    private void handleEventsGetRequest(
+            Socket socket,
+            String requestLine
+    ) throws IOException {
+
+        String[] requestParts = requestLine.split(" ");
+
+        if (requestParts.length < 2) {
+            sendText(socket, "Bad request", 400);
+            return;
+        }
+
+        String path = requestParts[1];
+
+        if (path.equals("/events") || path.equals("/events/")) {
+            sendJson(socket, getEventsListPayload());
+        } else if (path.startsWith("/events/")) {
+            handleEventFileRequest(socket, path);
+        } else {
+            sendText(socket, "Not found", 404);
+        }
+    }
+
+    // Lists every event folder under EventRecorder's events directory.
+    // Finalized events (metadata.json present) include their full metadata;
+    // still-active events report just a segment count, since metadata.json
+    // is only written once the event's post-event window has closed.
+    private String getEventsListPayload() {
+
+        JSONArray events = new JSONArray();
+
+        try {
+            if (eventRecorder == null) {
+                return events.toString();
+            }
+
+            File eventsDir = eventRecorder.getEventsDir();
+            File[] eventFolders = eventsDir.listFiles();
+
+            if (eventFolders != null) {
+
+                Arrays.sort(
+                        eventFolders,
+                        (a, b) -> b.getName().compareTo(a.getName())
+                );
+
+                for (File folder : eventFolders) {
+
+                    if (!folder.isDirectory()) {
+                        continue;
+                    }
+
+                    JSONObject entry = new JSONObject();
+                    entry.put("eventId", folder.getName());
+
+                    File metadataFile = new File(folder, "metadata.json");
+
+                    if (metadataFile.exists()) {
+
+                        String metadataText =
+                                new String(
+                                        readFileBytes(metadataFile),
+                                        StandardCharsets.UTF_8
+                                );
+
+                        entry.put("finalized", true);
+                        entry.put("metadata", new JSONObject(metadataText));
+
+                    } else {
+
+                        entry.put("finalized", false);
+
+                        File[] segmentFiles = folder.listFiles(
+                                (dir, name) -> name.endsWith(".mp4")
+                        );
+
+                        entry.put(
+                                "segmentCount",
+                                segmentFiles != null ? segmentFiles.length : 0
+                        );
+                    }
+
+                    events.put(entry);
+                }
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to build events payload", e);
+        }
+
+        return events.toString();
+    }
+
+    // Serves one file (a segment .mp4 or metadata.json) from inside an
+    // event folder. Rejects any path containing ".." or an extra "/" in the
+    // filename component, since eventId/fileName come straight from the
+    // request path.
+    private void handleEventFileRequest(
+            Socket socket,
+            String requestPath
+    ) throws IOException {
+
+        if (eventRecorder == null) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String remainder = requestPath.substring("/events/".length());
+        String[] parts = remainder.split("/", 2);
+
+        if (parts.length < 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String eventId = parts[0];
+        String fileName = parts[1];
+
+        if (eventId.contains("..")
+                || fileName.contains("..")
+                || fileName.contains("/")) {
+            sendText(socket, "Invalid path", 400);
+            return;
+        }
+
+        File eventFolder = new File(eventRecorder.getEventsDir(), eventId);
+        File requestedFile = new File(eventFolder, fileName);
+
+        if (!requestedFile.exists() || !requestedFile.isFile()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String contentType = fileName.endsWith(".json")
+                ? "application/json; charset=UTF-8"
+                : "video/mp4";
+
+        sendFile(socket, requestedFile, contentType);
+    }
+
+    private void handleEventsDeleteRequest(
+            Socket socket,
+            String requestLine
+    ) throws IOException {
+
+        String[] requestParts = requestLine.split(" ");
+
+        if (requestParts.length < 2) {
+            sendText(socket, "Bad request", 400);
+            return;
+        }
+
+        String path = requestParts[1];
+
+        if (!path.startsWith("/events/")) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        String remainder = path.substring("/events/".length());
+        String[] parts = remainder.split("/", 2);
+
+        String eventId = parts[0];
+
+        if (eventId.isEmpty() || eventId.contains("..")) {
+            sendText(socket, "Invalid path", 400);
+            return;
+        }
+
+        if (eventRecorder == null) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        File eventFolder = new File(eventRecorder.getEventsDir(), eventId);
+
+        if (!eventFolder.exists() || !eventFolder.isDirectory()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        // If only the eventId is provided, delete the whole event folder
+        if (parts.length == 1) {
+
+            boolean ok = deleteRecursively(eventFolder);
+
+            if (!ok) {
+                sendText(socket, "Failed to delete event", 500);
+                return;
+            }
+
+            sendText(socket, "Event deleted");
+            return;
+        }
+
+        // Otherwise delete a specific file inside the event folder
+        String fileName = parts[1];
+
+        if (fileName.isEmpty() || fileName.contains("..") || fileName.contains("/")) {
+            sendText(socket, "Invalid path", 400);
+            return;
+        }
+
+        File target = new File(eventFolder, fileName);
+
+        if (!target.exists() || !target.isFile()) {
+            sendText(socket, "Not found", 404);
+            return;
+        }
+
+        if (!target.delete()) {
+            sendText(socket, "Failed to delete file", 500);
+            return;
+        }
+
+        sendText(socket, "File deleted");
+    }
+
+    private boolean deleteRecursively(File f) {
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File c : children) {
+                    if (!deleteRecursively(c)) return false;
+                }
+            }
+        }
+        return f.delete();
+    }
+
+    private byte[] readFileBytes(File file) throws IOException {
+
+        try (InputStream inputStream = new FileInputStream(file)) {
+
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
+
+            return outputStream.toByteArray();
+        }
+    }
+
+    private void sendFile(
+            Socket socket,
+            File file,
+            String contentType
+    ) throws IOException {
+
+        byte[] data = readFileBytes(file);
+
+        String headers =
+                "HTTP/1.1 200 OK\r\n" +
+                        "Content-Type: " + contentType + "\r\n" +
+                        "Content-Length: " + data.length + "\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n";
+
+        OutputStream outputStream = socket.getOutputStream();
+
+        outputStream.write(headers.getBytes(StandardCharsets.UTF_8));
+        outputStream.write(data);
+        outputStream.flush();
+    }
+
     private String getStatusPayload() {
         try {
             if (trapDetector == null) {
@@ -5535,7 +3978,7 @@ public class WebServer {
         try {
             String saved = preferences.getString(
                     "detector_thresholds",
-                    "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18}"
+                    "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18,\"minClosingFrames\":5,\"minClosingDurationMs\":800}"
             );
             return new JSONObject(saved);
         } catch (Exception e) {
@@ -5552,7 +3995,7 @@ public class WebServer {
             return trapDetector.getThresholdSettingsJson().toString();
         } catch (Exception e) {
             Log.e(TAG, "Failed to build threshold payload", e);
-            return "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18}";
+            return "{\"baselineAdaptMeanDiffThreshold\":8.0,\"cellChangeThreshold\":15.0,\"closedMeanDiffThreshold\":18.0,\"closedChangedFractionThreshold\":0.18,\"minClosingFrames\":5,\"minClosingDurationMs\":800}";
         }
     }
 

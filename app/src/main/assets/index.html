@@ -27,6 +27,7 @@
             overflow: hidden;
             user-select: none;
             border: 1px solid #ddd;
+            vertical-align: top;
         }
 
         #preview {
@@ -103,15 +104,14 @@
         }
 
         #controls {
-            position: absolute;
-            bottom: 8px;
-            left: 8px;
+            position: static;
             display: flex;
+            flex-wrap: wrap;
             gap: 8px;
-            background: rgba(255,255,255,0.85);
+            background: #f5f5f5;
             padding: 6px;
-            border-radius: 6px;
-            z-index: 50;
+            box-sizing: border-box;
+            width: 100%;
         }
 
         button {

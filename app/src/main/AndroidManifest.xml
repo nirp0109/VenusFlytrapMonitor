@@ -4,6 +4,28 @@
     <!-- use camera is a must -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="true"/>
+
+    <!--
+         Required for MonitoringService (Phase F): running the camera +
+         web server as a foreground service so monitoring survives the
+         screen turning off / the Activity going to the background.
+
+         FOREGROUND_SERVICE_CAMERA is the API 34+ specific-use permission
+         required in addition to the general FOREGROUND_SERVICE permission
+         whenever a foreground service's type includes "camera".
+
+         POST_NOTIFICATIONS is required at runtime on API 33+ to show the
+         persistent foreground-service notification; must be requested from
+         MainActivity before starting the service.
+
+         WAKE_LOCK will back a PARTIAL_WAKE_LOCK held by the service so the
+         CPU doesn't sleep under Doze while the screen is off.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:allowBackup="true"
@@ -24,6 +46,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+             Phase F, step 2: bare-bones foreground service, proving the
+             notification/permission mechanics before any camera code
+             moves here (step 3). foregroundServiceType "camera" must
+             match the FOREGROUND_SERVICE_TYPE_CAMERA value passed to
+             startForeground() in MonitoringService.
+        -->
+        <service
+            android:name=".MonitoringService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
     </application>
 
 </manifest>
