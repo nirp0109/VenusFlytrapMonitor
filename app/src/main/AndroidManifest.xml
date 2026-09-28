@@ -22,6 +22,7 @@
          WAKE_LOCK will back a PARTIAL_WAKE_LOCK held by the service so the
          CPU doesn't sleep under Doze while the screen is off.
     -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

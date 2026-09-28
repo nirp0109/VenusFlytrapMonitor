@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
@@ -57,6 +58,18 @@ import android.graphics.Bitmap;
  * previewBound mutual-exclusion dance entirely: ImageAnalysis is always
  * bound, and VideoCapture binds alongside it once ROIs exist - there's no
  * competing use case to make exclusive anymore.
+ *
+ * Phase F, step 5: holds a WifiLock (WIFI_MODE_FULL_HIGH_PERF) for the
+ * lifetime of the service. This is deliberately a WifiLock, not a
+ * PARTIAL_WAKE_LOCK: real screen-off testing showed occasional slow
+ * first-responses consistent with the WiFi radio dropping into a
+ * low-power state during Doze, not the service itself pausing - so only
+ * the radio needs to be kept up. A full wake lock would additionally
+ * prevent the CPU from idling between polls, which would undo the
+ * battery benefit already measured from the phone being able to sleep
+ * down when idle (see handoff §20). WAKE_LOCK permission - required by
+ * WifiLock despite the name - was already added to the manifest in
+ * Phase F step 1 (§15).
  */
 public class MonitoringService extends LifecycleService {
 
@@ -77,6 +90,9 @@ public class MonitoringService extends LifecycleService {
     // every camera frame - likely ~30fps - was pure wasted CPU/battery.
     private static final long FRAME_PROCESS_INTERVAL_MS = 300;
 
+    private static final String WIFI_LOCK_TAG =
+            "VenusFlytrapMonitor:monitoringWifiLock";
+
     private ExecutorService analysisExecutor;
 
     private WebServer webServer;
@@ -92,6 +108,8 @@ public class MonitoringService extends LifecycleService {
     private VideoCapture<Recorder> videoCapture;
 
     private EventRecorder eventRecorder;
+
+    private WifiManager.WifiLock wifiLock;
 
     // Renamed from MainActivity's previewBound: tracks whether the camera
     // is currently bound for monitoring (ImageAnalysis + VideoCapture) as
@@ -158,6 +176,8 @@ public class MonitoringService extends LifecycleService {
 
             return;
         }
+
+        acquireWifiLock();
 
         analysisExecutor = Executors.newSingleThreadExecutor();
 
@@ -226,6 +246,8 @@ public class MonitoringService extends LifecycleService {
 
         batteryHandler.removeCallbacks(batteryRefreshRunnable);
 
+        releaseWifiLock();
+
         if (eventRecorder != null) {
             eventRecorder.stop();
         }
@@ -243,6 +265,45 @@ public class MonitoringService extends LifecycleService {
         }
 
         Log.d(TAG, "MonitoringService destroyed");
+    }
+
+    // Acquires a non-reference-counted, high-performance WifiLock for the
+    // service's lifetime. WIFI_MODE_FULL_HIGH_PERF (rather than the
+    // deprecated WIFI_MODE_FULL) disables WiFi's own power-saving
+    // negotiation with the access point, which is specifically what
+    // caused the occasional slow first-response after screen-off idle
+    // (radio waking from a low-power state - see handoff §17 #45 and
+    // §19 Phase F item 1.6). Non-reference-counted because this service
+    // has a single simple lifecycle (acquire in onCreate, release in
+    // onDestroy) and doesn't need nested acquire/release counting.
+    private void acquireWifiLock() {
+
+        WifiManager wifiManager =
+                (WifiManager) getApplicationContext()
+                        .getSystemService(Context.WIFI_SERVICE);
+
+        if (wifiManager == null) {
+            Log.w(TAG, "WifiManager unavailable - skipping WifiLock");
+            return;
+        }
+
+        wifiLock = wifiManager.createWifiLock(
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                WIFI_LOCK_TAG
+        );
+
+        wifiLock.setReferenceCounted(false);
+        wifiLock.acquire();
+
+        Log.d(TAG, "WifiLock acquired");
+    }
+
+    private void releaseWifiLock() {
+
+        if (wifiLock != null && wifiLock.isHeld()) {
+            wifiLock.release();
+            Log.d(TAG, "WifiLock released");
+        }
     }
 
     // Called both at startup (via onCreate() -> loadTrapConfiguration())
@@ -413,7 +474,9 @@ public class MonitoringService extends LifecycleService {
                 videoRecorder = new Recorder.Builder()
                         .setQualitySelector(qualitySelector)
                         .build();
-                videoCapture = VideoCapture.withOutput(videoRecorder);
+                videoCapture = new VideoCapture.Builder<>(videoRecorder)
+                        .setTargetRotation(rotation)
+                        .build();
             }
 
             camera = cameraProvider.bindToLifecycle(
